@@ -180,6 +180,44 @@ async def test_pick_and_undo_update_assistant_available_players(
 
 
 @pytest.mark.asyncio
+async def test_second_round_snake_pick_is_in_user_roster_summary(
+    client: AsyncClient,
+) -> None:
+    await seed_standard_fixtures(client)
+    await create_started_draft(client, user_position=1)
+
+    for _ in range(24):
+        assistant = (await client.get("/draft/assistant")).json()
+        pick_response = await client.post(
+            "/draft/picks",
+            json={"player_id": assistant["best_available"][0]["player_id"]},
+        )
+        assert pick_response.status_code == 200
+
+    board = (await client.get("/draft/board")).json()
+    user_team = next(team for team in board["teams"] if team["is_user_team"])
+    user_picks = [
+        pick for pick in board["picks"] if pick["fantasy_team_id"] == user_team["id"]
+    ]
+    assert [pick["overall_pick"] for pick in user_picks] == [1, 24]
+
+    assistant = (await client.get("/draft/assistant")).json()
+    summary = assistant["roster_summary"]
+    represented = [
+        *summary["assignments"],
+        *summary["bench_assignments"],
+        *summary["unassigned_players"],
+    ]
+
+    assert assistant["user_team"]["players_drafted"] == 2
+    assert summary["players_drafted"] == 2
+    assert len(represented) == 2
+    assert {player["player_id"] for player in represented} == {
+        pick["player_id"] for pick in user_picks
+    }
+
+
+@pytest.mark.asyncio
 async def test_roster_fits_use_open_slots_and_structured_reasons(
     client: AsyncClient,
 ) -> None:
