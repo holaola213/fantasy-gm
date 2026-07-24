@@ -1,9 +1,10 @@
 # Fantasy GM
 
 Fantasy GM is a single-user fantasy basketball decision-support application.
-Milestone 0 establishes the local development foundation only: PostgreSQL,
-FastAPI, React/Vite, Alembic, environment examples, and a database-backed health
-check.
+Milestone 0 established the local development foundation: PostgreSQL, FastAPI,
+React/Vite, Alembic, environment examples, and a database-backed health check.
+Milestone 1 adds the Players vertical slice with a deterministic local fixture
+dataset.
 
 Existing product and architecture documentation lives under `docs/` and
 `research/`.
@@ -70,7 +71,7 @@ If PostgreSQL is unavailable, the API returns HTTP 503 with:
 
 ## Tests
 
-Focused backend unit tests do not require a live PostgreSQL instance:
+Backend tests use PostgreSQL through Docker Compose:
 
 ```powershell
 docker compose run --rm backend pytest
@@ -84,4 +85,38 @@ Alembic is initialized and reads the database URL from the backend settings:
 docker compose run --rm backend alembic upgrade head
 ```
 
-No fantasy domain tables are part of Milestone 0.
+## Seed Local Players
+
+The player seed command inserts or updates deterministic local development
+fixtures. Fixture IDs are not NBA or ESPN identifiers.
+
+```powershell
+docker compose run --rm backend python -m app.players.seed
+```
+
+The seed is idempotent and does not delete unrelated player rows.
+
+## Players API
+
+List players:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/players"
+```
+
+Search and filter players:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/players?search=jokic&team=DEN&position=C&active=true"
+```
+
+The list response includes matching `total` before pagination:
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "limit": 50,
+  "offset": 0
+}
+```
