@@ -131,6 +131,20 @@ docker compose run --rm backend python -m app.projections.seed
 The projection seed is idempotent and does not delete unrelated projection
 sources, projection sets, or projection rows.
 
+## Seed Local Draft Eligibility
+
+The draft seed command inserts player eligibility rows for the deterministic
+local player fixtures. It does not create a draft session. Fixture eligibility
+values are local development data and are not ESPN or NBA identifiers.
+
+Run it after seeding players:
+
+```powershell
+docker compose run --rm backend python -m app.drafts.seed
+```
+
+The seed is idempotent and does not delete unrelated eligibility rows.
+
 ## Players API
 
 List players:
@@ -229,3 +243,58 @@ database-side optimization or precomputed valuation data.
 The projection scoring logic should stay local to the projections feature until
 a second feature, such as replacement-level valuation or roster analysis, needs
 the same calculation.
+
+## Draft API
+
+Milestone 4 supports one manually managed snake draft for the singleton league.
+Draft creation snapshots the singleton league, the calculated draft rounds, and
+the deterministic active projection set. Later league edits or projection-set
+activation changes do not alter an existing draft. Draft rounds are calculated
+from PG, SG, SF, PF, C, G, F, UTIL, and BE roster-slot counts; IR is excluded.
+
+Create a setup draft:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/draft" -Method Post -ContentType "application/json" -Body $json
+```
+
+Get draft state:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/draft"
+Invoke-RestMethod "http://localhost:8000/draft/board"
+Invoke-RestMethod "http://localhost:8000/draft/available-players"
+```
+
+Start the draft and record the next pick:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/draft/start" -Method Post
+Invoke-RestMethod "http://localhost:8000/draft/picks" -Method Post -ContentType "application/json" -Body '{"player_id":1}'
+```
+
+Undo the latest pick:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/draft/picks/latest" -Method Delete
+```
+
+Get player eligibility:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/players/1/eligibility"
+```
+
+Available draft players are active players included in the draft's snapshotted
+projection set and not already drafted in that draft session. A projected player
+without eligibility remains visible with empty eligibility and compatible-slot
+lists, but cannot be drafted until eligibility exists.
+
+Setup drafts can be edited before starting. Starting a draft freezes the fantasy
+teams, draft positions, user-team designation, rounds, team count, and projection
+set. Setup and in-progress drafts may be deleted. Completed drafts are preserved
+and cannot be deleted through the Milestone 4 API.
+
+Milestone 4 does not provide player valuation, value over replacement, draft
+recommendations, automatic roster-slot assignment, historical draft browsing, or
+live ESPN synchronization.

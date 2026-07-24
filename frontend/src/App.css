@@ -232,6 +232,74 @@ td input {
   margin-top: 28px;
 }
 
+.split-actions {
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.summary-panel {
+  margin-bottom: 28px;
+}
+
+.summary-panel h2 {
+  margin-bottom: 12px;
+}
+
+.summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.summary-grid div {
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.summary-grid span {
+  color: #4f5f6d;
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.summary-grid strong {
+  display: block;
+  text-transform: capitalize;
+}
+
+.board-layout {
+  align-items: start;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) 280px;
+}
+
+.team-rosters {
+  display: grid;
+  gap: 12px;
+}
+
+.team-roster {
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.team-roster h3 {
+  font-size: 0.95rem;
+  margin: 0 0 8px;
+}
+
+.team-roster ul {
+  color: #4f5f6d;
+  margin: 0;
+  padding-left: 20px;
+}
+
 @media (max-width: 720px) {
   .app-shell {
     padding: 16px;
@@ -251,6 +319,11 @@ td input {
   }
 
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-grid,
+  .board-layout {
     grid-template-columns: 1fr;
   }
 

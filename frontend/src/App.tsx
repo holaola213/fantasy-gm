@@ -1,10 +1,11 @@
 import { useState } from "react";
 
+import { DraftPage } from "./features/draft/DraftPage";
 import { LeagueSettingsPage } from "./features/league/LeagueSettingsPage";
 import { PlayersPage } from "./features/players/PlayersPage";
 import { ProjectionsPage } from "./features/projections/ProjectionsPage";
 
-type Page = "players" | "league" | "projections";
+type Page = "players" | "league" | "projections" | "draft";
 
 export default function App() {
   const [page, setPage] = useState<Page>("players");
@@ -20,7 +21,9 @@ export default function App() {
                 ? "Players"
                 : page === "league"
                   ? "League Settings"
-                  : "Projections"}
+                  : page === "projections"
+                    ? "Projections"
+                    : "Draft"}
             </h1>
           </div>
           <nav className="app-nav" aria-label="Application navigation">
@@ -45,11 +48,19 @@ export default function App() {
             >
               Projections
             </button>
+            <button
+              className={page === "draft" ? "active" : ""}
+              onClick={() => setPage("draft")}
+              type="button"
+            >
+              Draft
+            </button>
           </nav>
         </header>
         {page === "players" ? <PlayersPage /> : null}
         {page === "league" ? <LeagueSettingsPage /> : null}
         {page === "projections" ? <ProjectionsPage /> : null}
+        {page === "draft" ? <DraftPage /> : null}
       </section>
     </main>
   );
