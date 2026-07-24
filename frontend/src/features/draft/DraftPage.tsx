@@ -7,7 +7,9 @@ type DraftSort =
   | "team"
   | "position"
   | "fantasy_points_per_game"
-  | "projected_fantasy_points";
+  | "projected_fantasy_points"
+  | "overall_vor"
+  | "overall_rank";
 
 type LeagueResponse = {
   name: string;
@@ -63,13 +65,16 @@ type DraftBoard = {
 
 type AvailablePlayer = {
   player_id: number;
-  full_name: string;
+  player_name: string;
   team: string | null;
   primary_position: string | null;
   eligible_positions: string[];
   compatible_roster_slots: string[];
-  fantasy_points_per_game: number;
-  projected_fantasy_points: number;
+  fantasy_points_per_game: string;
+  projected_fantasy_points: string;
+  overall_vor: string | null;
+  best_value_position: string | null;
+  overall_rank: number | null;
 };
 
 type AvailablePlayerResponse = {
@@ -132,7 +137,7 @@ export function DraftPage() {
       }
 
       try {
-        const response = await fetch(`/api/draft/available-players?${params}`, {
+        const response = await fetch(`/api/valuations?available_only=true&${params}`, {
           signal: controller.signal,
         });
         if (!response.ok) {
@@ -397,7 +402,14 @@ export function DraftPage() {
       return;
     }
     setSort(nextSort);
-    setDirection(nextSort === "player" || nextSort === "team" || nextSort === "position" ? "asc" : "desc");
+    setDirection(
+      nextSort === "player" ||
+        nextSort === "team" ||
+        nextSort === "position" ||
+        nextSort === "overall_rank"
+        ? "asc"
+        : "desc",
+    );
   }
 
   if (isLoading) {
@@ -703,7 +715,7 @@ function AvailablePlayersTable({
   return (
     <section className="editor-section">
       <div className="section-header">
-        <h2>Available Players</h2>
+        <h2>Available Player Values</h2>
       </div>
       <div className="filters" aria-label="Draft player filters">
         <label>
@@ -749,21 +761,27 @@ function AvailablePlayersTable({
                 <SortableHeader label="Position" sortKey="position" currentSort={sort} direction={direction} onSort={onSort} />
                 <th>Eligible</th>
                 <th>Slots</th>
+                <SortableHeader label="Overall Rank" sortKey="overall_rank" currentSort={sort} direction={direction} onSort={onSort} />
                 <SortableHeader label="Fantasy PPG" sortKey="fantasy_points_per_game" currentSort={sort} direction={direction} onSort={onSort} />
                 <SortableHeader label="Projected Total" sortKey="projected_fantasy_points" currentSort={sort} direction={direction} onSort={onSort} />
+                <SortableHeader label="Overall VOR" sortKey="overall_vor" currentSort={sort} direction={direction} onSort={onSort} />
+                <th>Value Position</th>
                 <th>Pick</th>
               </tr>
             </thead>
             <tbody>
               {players.map((player) => (
                 <tr key={player.player_id}>
-                  <td>{player.full_name}</td>
+                  <td>{player.player_name}</td>
                   <td>{player.team ?? "Unsigned"}</td>
                   <td>{player.primary_position ?? "Unknown"}</td>
                   <td>{player.eligible_positions.join(", ") || "None"}</td>
                   <td>{player.compatible_roster_slots.join(", ") || "None"}</td>
+                  <td>{player.overall_rank ?? "None"}</td>
                   <td>{formatNumber(player.fantasy_points_per_game)}</td>
                   <td>{formatNumber(player.projected_fantasy_points)}</td>
+                  <td>{formatNumber(player.overall_vor)}</td>
+                  <td>{player.best_value_position ?? "None"}</td>
                   <td>
                     <button
                       disabled={isSaving}
@@ -850,9 +868,12 @@ function defaultTeams(teamCount: number): TeamSetup[] {
   }));
 }
 
-function formatNumber(value: number) {
+function formatNumber(value: string | null) {
+  if (value === null) {
+    return "None";
+  }
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 2,
     minimumFractionDigits: 0,
-  }).format(value);
+  }).format(Number(value));
 }

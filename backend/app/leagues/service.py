@@ -14,6 +14,10 @@ class LeaguePersistenceError(Exception):
     pass
 
 
+class LeagueConfigurationLockedError(Exception):
+    pass
+
+
 class LeagueService:
     def __init__(self, repository: LeagueRepository, session: AsyncSession) -> None:
         self.repository = repository
@@ -28,6 +32,10 @@ class LeagueService:
     async def replace_league(self, payload: LeagueUpdate) -> League:
         try:
             async with self.session.begin():
+                if await self.repository.active_draft_exists():
+                    raise LeagueConfigurationLockedError
                 return await self.repository.replace_singleton_league(payload)
+        except LeagueConfigurationLockedError:
+            raise
         except SQLAlchemyError as exc:
             raise LeaguePersistenceError from exc

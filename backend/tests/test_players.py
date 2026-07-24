@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.main import app
 from app.players.seed import seed_players
+from app.shared.fixtures.development import DEVELOPMENT_PLAYER_FIXTURES
 from app.shared.config.settings import get_settings
 from app.shared.database.base import Base
 from app.shared.database.session import get_session
@@ -79,10 +80,10 @@ async def test_list_players_returns_envelope(client: AsyncClient) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 10
+    assert body["total"] == len(DEVELOPMENT_PLAYER_FIXTURES)
     assert body["limit"] == 50
     assert body["offset"] == 0
-    assert len(body["items"]) == 10
+    assert len(body["items"]) == 50
     assert {"id", "full_name", "team", "primary_position", "is_active"} <= set(
         body["items"][0]
     )
@@ -146,7 +147,7 @@ async def test_pagination_total_counts_matches_before_pagination(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 10
+    assert body["total"] == len(DEVELOPMENT_PLAYER_FIXTURES)
     assert body["limit"] == 3
     assert body["offset"] == 2
     assert len(body["items"]) == 3
@@ -198,8 +199,8 @@ async def test_seed_is_idempotent_and_does_not_delete_unrelated_players() -> Non
         seed_module.AsyncSessionLocal = seed_session_factory
 
         try:
-            assert await seed_players() == 10
-            assert await seed_players() == 10
+            assert await seed_players() == len(DEVELOPMENT_PLAYER_FIXTURES)
+            assert await seed_players() == len(DEVELOPMENT_PLAYER_FIXTURES)
         finally:
             seed_module.AsyncSessionLocal = original_session_factory
             await seed_engine.dispose()
@@ -211,7 +212,7 @@ async def test_seed_is_idempotent_and_does_not_delete_unrelated_players() -> Non
                 text("SELECT full_name FROM players WHERE id = 999")
             )
 
-        assert count == 11
+        assert count == len(DEVELOPMENT_PLAYER_FIXTURES) + 1
         assert unrelated == "Unrelated Player"
     finally:
         if "schema_engine" in locals():

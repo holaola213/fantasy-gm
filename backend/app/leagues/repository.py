@@ -1,4 +1,4 @@
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -77,3 +77,14 @@ class LeagueRepository:
         if league is None:
             raise RuntimeError("league replacement failed")
         return league
+
+    async def active_draft_exists(self) -> bool:
+        from app.drafts.model import DraftSession
+
+        query = select(
+            exists().where(
+                DraftSession.league_id == SINGLETON_LEAGUE_ID,
+                DraftSession.status.in_(("setup", "in_progress")),
+            )
+        )
+        return bool(await self.session.scalar(query))

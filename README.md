@@ -9,6 +9,8 @@ Milestone 2 adds the singleton League Configuration slice for local ESPN points
 league settings.
 Milestone 3 adds normalized season player projections and league-scored
 projection display.
+Milestone 4 adds a manual snake draft.
+Milestone 5 adds dynamic league-specific player valuation over replacement.
 
 Existing product and architecture documentation lives under `docs/` and
 `research/`.
@@ -91,8 +93,10 @@ docker compose run --rm backend alembic upgrade head
 
 ## Seed Local Players
 
-The player seed command inserts or updates deterministic local development
-fixtures. Fixture IDs are not NBA or ESPN identifiers.
+The player seed command inserts or updates a deterministic local development
+fixture population. It keeps the original named players and adds generated
+synthetic players so valuation can be exercised locally. Fixture names, values,
+and IDs are local development data and are not NBA or ESPN identifiers.
 
 ```powershell
 docker compose run --rm backend python -m app.players.seed
@@ -128,8 +132,9 @@ docker compose run --rm backend python -m app.leagues.seed
 docker compose run --rm backend python -m app.projections.seed
 ```
 
-The projection seed is idempotent and does not delete unrelated projection
-sources, projection sets, or projection rows.
+The projection seed creates or updates projections for the deterministic
+synthetic fixture population. It is idempotent and does not delete unrelated
+projection sources, projection sets, or projection rows.
 
 ## Seed Local Draft Eligibility
 
@@ -144,6 +149,27 @@ docker compose run --rm backend python -m app.drafts.seed
 ```
 
 The seed is idempotent and does not delete unrelated eligibility rows.
+
+## Full Local Demo Seed Workflow
+
+From a migrated database, run the standard seeds in this order:
+
+```powershell
+docker compose run --rm backend python -m app.players.seed
+docker compose run --rm backend python -m app.leagues.seed
+docker compose run --rm backend python -m app.projections.seed
+docker compose run --rm backend python -m app.drafts.seed
+```
+
+This creates approximately 180 synthetic projected players with balanced base
+positions, multi-position eligibility, varied NBA-team labels, varied games and
+minutes, broad fantasy-point distribution, and a few deterministic ties. The
+data is for local functionality testing only, not real NBA analysis.
+
+No draft session is seeded. Open `http://localhost:5173`, choose Valuations, and
+the page should load replacement levels plus player valuation rows. To test
+draft-available valuation, create and start a temporary draft from the Draft page;
+the Available Player Values table then uses `GET /valuations?available_only=true`.
 
 ## Players API
 
@@ -240,9 +266,102 @@ application and sorts them in memory. That is intentional and acceptable for the
 current NBA-scale dataset. A larger future version may move this to
 database-side optimization or precomputed valuation data.
 
-The projection scoring logic should stay local to the projections feature until
-a second feature, such as replacement-level valuation or roster analysis, needs
-the same calculation.
+Projection, draft, and valuation features share one backend scoring component so
+fantasy-point formulas do not diverge. Missing scoring-rule categories
+contribute zero points.
+
+## Valuations API
+
+Milestone 5 calculates player valuation dynamically from the singleton league,
+the selected projection set, player eligibility, and current draft state. It does
+not persist valuation rows, create valuation snapshots, or provide personalized
+draft recommendations.
+
+List player valuations:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/valuations?sort=overall_rank&direction=asc"
+```
+
+Get replacement-level context:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/valuations/replacement-levels"
+```
+
+Get one player valuation:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/players/1/valuation"
+```
+
+Supported valuation filters are `search`, `team`, `position`, `limit`, and
+`offset`. Supported sorts are `player`, `team`, `position`,
+`fantasy_points_per_game`, `projected_fantasy_points`, `overall_vor`, and
+`overall_rank`.
+
+Valuation uses projected season fantasy points as the value-over-replacement
+basis:
+
+```text
+fantasy points per game = league scoring applied to per-game projections
+projected fantasy points = fantasy points per game * projected games
+VOR = projected fantasy points - positional replacement fantasy points
+```
+
+FPPG is displayed as supporting information. There is no blended score,
+durability multiplier, injury modifier, auction value, ADP, or recommendation
+logic in Milestone 5.
+
+Replacement levels come from exact league-wide active-roster optimization. The
+application expands every active slot by team count and finds the highest-total
+assignment of projected players to active lineup slots, respecting eligibility:
+
+- `PG`, `SG`, `SF`, `PF`, and `C` accept only the matching base position.
+- `G` accepts `PG` or `SG`.
+- `F` accepts `SF` or `PF`.
+- `UTIL` accepts `PG`, `SG`, `SF`, `PF`, or `C`.
+- `BE` contributes to the informational drafted-player target only.
+- `IR` is ignored for active demand and drafted-player target.
+
+After active rosters are filled, each positional replacement player is the best
+remaining player eligible at that base position. V1 uses one cutoff player, not
+a replacement band. Negative VOR is preserved because it indicates a player
+projects below replacement level.
+
+Multi-position players receive one position-value entry for every eligible base
+position. Overall VOR is the highest positional VOR, with ties broken in
+`PG`, `SG`, `SF`, `PF`, `C` order. Players without eligibility remain visible in
+valuation lists when projected, but have empty position values and no overall
+VOR.
+
+Projection-set resolution follows this order:
+
+1. Explicit `projection_set_id`.
+2. Current setup or in-progress draft's snapshotted projection set.
+3. The deterministic active projection set.
+
+`available_only=true` requires a current setup or in-progress draft, always uses
+that draft's snapshotted projection set, and excludes drafted players. Full-pool
+ranks are calculated before filters, pagination, and available-player exclusion,
+so filtered or draft-available results may show rank gaps.
+
+If league configuration is missing, valuation endpoints return HTTP 409:
+
+```json
+{
+  "detail": "league configuration required"
+}
+```
+
+If a projection pool cannot supply replacement players for the configured active
+roster demand, valuation endpoints return HTTP 409:
+
+```json
+{
+  "detail": "insufficient eligible player pool"
+}
+```
 
 ## Draft API
 
@@ -295,6 +414,10 @@ teams, draft positions, user-team designation, rounds, team count, and projectio
 set. Setup and in-progress drafts may be deleted. Completed drafts are preserved
 and cannot be deleted through the Milestone 4 API.
 
-Milestone 4 does not provide player valuation, value over replacement, draft
-recommendations, automatic roster-slot assignment, historical draft browsing, or
-live ESPN synchronization.
+League scoring and roster settings are locked while a setup or in-progress draft
+exists, because draft valuation depends on those settings. Delete the active
+draft or complete it before changing league settings. Completed drafts do not
+block league configuration changes.
+
+Milestone 5 does not provide draft recommendations, automatic roster-slot
+assignment, historical draft browsing, or live ESPN synchronization.

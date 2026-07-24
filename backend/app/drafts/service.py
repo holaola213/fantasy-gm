@@ -1,6 +1,4 @@
 from datetime import UTC, datetime
-from decimal import Decimal
-
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +23,7 @@ from app.drafts.schemas import (
 from app.leagues.repository import SINGLETON_LEAGUE_ID
 from app.players.model import Player, PlayerEligibility
 from app.projections.model import PlayerProjection
-from app.projections.service import STAT_TO_SCORING_KEY
+from app.shared.scoring import FantasyScorer
 
 
 class DraftNotFoundError(Exception):
@@ -448,12 +446,14 @@ class DraftService:
         rows: list[tuple[Player, PlayerProjection]],
     ) -> list[AvailablePlayerRead]:
         league = await self.repository.get_singleton_league()
-        scoring_rules = {rule.stat_key: rule.points for rule in league.scoring_rules} if league else {}
+        scorer = FantasyScorer(league.scoring_rules) if league else None
         configured_slots = self._configured_draft_slots(league) if league else []
         items = []
         for player, projection in rows:
             positions = await self.repository.get_player_eligibilities(player.id)
-            fantasy_points = self._fantasy_points_per_game(projection, scoring_rules)
+            fantasy_points = (
+                scorer.fantasy_points_per_game(projection) if scorer else 0
+            )
             items.append(
                 AvailablePlayerRead(
                     player_id=player.id,
@@ -477,15 +477,3 @@ class DraftService:
             for slot in sorted(league.roster_slots, key=lambda item: item.sort_order)
             if slot.count > 0 and slot.slot_key != "IR"
         ]
-
-    def _fantasy_points_per_game(
-        self,
-        projection: PlayerProjection,
-        scoring_rules: dict[str, Decimal],
-    ) -> Decimal:
-        total = Decimal("0")
-        for stat_name, scoring_key in STAT_TO_SCORING_KEY.items():
-            stat_value = getattr(projection, stat_name)
-            scoring_value = scoring_rules.get(scoring_key, Decimal("0"))
-            total += stat_value * scoring_value
-        return total

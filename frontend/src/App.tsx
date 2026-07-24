@@ -4,8 +4,9 @@ import { DraftPage } from "./features/draft/DraftPage";
 import { LeagueSettingsPage } from "./features/league/LeagueSettingsPage";
 import { PlayersPage } from "./features/players/PlayersPage";
 import { ProjectionsPage } from "./features/projections/ProjectionsPage";
+import { ValuationsPage } from "./features/valuations/ValuationsPage";
 
-type Page = "players" | "league" | "projections" | "draft";
+type Page = "players" | "league" | "projections" | "valuations" | "draft";
 
 export default function App() {
   const [page, setPage] = useState<Page>("players");
@@ -23,7 +24,9 @@ export default function App() {
                   ? "League Settings"
                   : page === "projections"
                     ? "Projections"
-                    : "Draft"}
+                    : page === "valuations"
+                      ? "Valuations"
+                      : "Draft"}
             </h1>
           </div>
           <nav className="app-nav" aria-label="Application navigation">
@@ -49,6 +52,13 @@ export default function App() {
               Projections
             </button>
             <button
+              className={page === "valuations" ? "active" : ""}
+              onClick={() => setPage("valuations")}
+              type="button"
+            >
+              Valuations
+            </button>
+            <button
               className={page === "draft" ? "active" : ""}
               onClick={() => setPage("draft")}
               type="button"
@@ -60,6 +70,7 @@ export default function App() {
         {page === "players" ? <PlayersPage /> : null}
         {page === "league" ? <LeagueSettingsPage /> : null}
         {page === "projections" ? <ProjectionsPage /> : null}
+        {page === "valuations" ? <ValuationsPage /> : null}
         {page === "draft" ? <DraftPage /> : null}
       </section>
     </main>

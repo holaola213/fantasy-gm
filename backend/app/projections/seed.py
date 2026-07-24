@@ -9,10 +9,10 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.players.model import Player
-from app.players.seed import PLAYER_FIXTURES
 from app.projections.model import PlayerProjection, ProjectionSet, ProjectionSource
 from app.projections.schemas import normalize_source_key
 from app.shared.database.session import AsyncSessionLocal
+from app.shared.fixtures.development import DEVELOPMENT_PLAYER_FIXTURES
 
 
 @dataclass(frozen=True)
@@ -39,16 +39,21 @@ AS_OF_DATE = date(2026, 7, 24)
 # Local development fixture values only. Future real imports should create new
 # immutable projection sets instead of updating historical projection sets.
 PROJECTION_FIXTURES = [
-    ProjectionFixture(1, Decimal("70.5"), Decimal("34.2"), Decimal("10.8"), Decimal("18.9"), Decimal("5.1"), Decimal("6.3"), Decimal("12.4"), Decimal("9.2"), Decimal("1.4"), Decimal("0.9"), Decimal("3.1")),
-    ProjectionFixture(2, Decimal("72.0"), Decimal("34.8"), Decimal("10.5"), Decimal("21.0"), Decimal("8.2"), Decimal("9.1"), Decimal("5.6"), Decimal("6.4"), Decimal("1.8"), Decimal("1.0"), Decimal("2.4")),
-    ProjectionFixture(3, Decimal("68.5"), Decimal("35.4"), Decimal("9.8"), Decimal("20.7"), Decimal("6.7"), Decimal("8.2"), Decimal("8.5"), Decimal("9.1"), Decimal("1.4"), Decimal("0.5"), Decimal("3.7")),
-    ProjectionFixture(4, Decimal("66.0"), Decimal("32.6"), Decimal("11.2"), Decimal("19.0"), Decimal("7.0"), Decimal("10.8"), Decimal("11.1"), Decimal("6.2"), Decimal("1.2"), Decimal("1.1"), Decimal("3.0")),
-    ProjectionFixture(5, Decimal("74.0"), Decimal("35.0"), Decimal("9.4"), Decimal("20.8"), Decimal("5.0"), Decimal("6.2"), Decimal("5.7"), Decimal("5.0"), Decimal("1.3"), Decimal("0.6"), Decimal("2.8")),
-    ProjectionFixture(6, Decimal("70.0"), Decimal("36.1"), Decimal("9.1"), Decimal("19.8"), Decimal("5.8"), Decimal("6.9"), Decimal("8.0"), Decimal("5.3"), Decimal("1.1"), Decimal("0.7"), Decimal("2.5")),
-    ProjectionFixture(7, Decimal("69.5"), Decimal("31.8"), Decimal("8.9"), Decimal("18.5"), Decimal("4.7"), Decimal("5.8"), Decimal("10.7"), Decimal("4.1"), Decimal("1.2"), Decimal("3.4"), Decimal("3.3")),
-    ProjectionFixture(8, Decimal("65.0"), Decimal("32.4"), Decimal("8.5"), Decimal("18.4"), Decimal("4.3"), Decimal("4.8"), Decimal("4.5"), Decimal("6.1"), Decimal("1.1"), Decimal("0.4"), Decimal("2.9")),
-    ProjectionFixture(9, Decimal("71.0"), Decimal("33.1"), Decimal("7.4"), Decimal("13.9"), Decimal("3.9"), Decimal("5.2"), Decimal("10.2"), Decimal("4.0"), Decimal("1.1"), Decimal("0.9"), Decimal("2.1")),
-    ProjectionFixture(10, Decimal("73.0"), Decimal("34.0"), Decimal("8.8"), Decimal("18.7"), Decimal("5.6"), Decimal("7.2"), Decimal("7.4"), Decimal("5.4"), Decimal("1.0"), Decimal("0.7"), Decimal("2.7")),
+    ProjectionFixture(
+        fixture.id,
+        fixture.games,
+        fixture.minutes_per_game,
+        fixture.fgm,
+        fixture.fga,
+        fixture.ftm,
+        fixture.fta,
+        fixture.rebounds,
+        fixture.assists,
+        fixture.steals,
+        fixture.blocks,
+        fixture.turnovers,
+    )
+    for fixture in DEVELOPMENT_PLAYER_FIXTURES
 ]
 
 
@@ -109,24 +114,32 @@ async def seed_projections() -> int:
         if projection_set_id is None:
             raise RuntimeError("projection set seed failed")
 
-        fixture_player_ids = {fixture.id for fixture in PLAYER_FIXTURES}
-        existing_player_ids = set(
+        fixture_names_by_id = {
+            fixture.id: fixture.full_name for fixture in DEVELOPMENT_PLAYER_FIXTURES
+        }
+        existing_players = list(
             await session.scalars(
-                select(Player.id).where(Player.id.in_(fixture_player_ids))
+                select(Player).where(Player.full_name.in_(set(fixture_names_by_id.values())))
             )
         )
-        missing_player_ids = sorted(fixture_player_ids - existing_player_ids)
-        if missing_player_ids:
-            missing = ", ".join(str(player_id) for player_id in missing_player_ids)
+        players_by_name = {player.full_name: player for player in existing_players}
+        missing_player_names = sorted(set(fixture_names_by_id.values()) - set(players_by_name))
+        if missing_player_names:
+            missing = ", ".join(missing_player_names)
             raise RuntimeError(
                 "projection seed requires seeded player fixtures; "
-                f"missing player ids: {missing}"
+                f"missing players: {missing}"
             )
 
         projection_rows = [
             {
                 "projection_set_id": projection_set_id,
-                **fixture.__dict__,
+                **{
+                    **fixture.__dict__,
+                    "player_id": players_by_name[
+                        fixture_names_by_id[fixture.player_id]
+                    ].id,
+                },
             }
             for fixture in PROJECTION_FIXTURES
         ]

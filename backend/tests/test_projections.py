@@ -18,6 +18,7 @@ from app.projections.seed import seed_projections
 from app.shared.config.settings import get_settings
 from app.shared.database.base import Base
 from app.shared.database.session import get_session
+from app.shared.fixtures.development import DEVELOPMENT_PLAYER_FIXTURES
 
 
 @pytest_asyncio.fixture()
@@ -373,7 +374,7 @@ async def test_projection_seed_reports_missing_player_fixtures() -> None:
         projections_seed_module.AsyncSessionLocal = seed_session_factory
 
         try:
-            with pytest.raises(RuntimeError, match="missing player ids"):
+            with pytest.raises(RuntimeError, match="missing players"):
                 await seed_projections()
         finally:
             projections_seed_module.AsyncSessionLocal = (
@@ -420,8 +421,8 @@ async def test_seed_is_idempotent_and_keeps_unrelated_projection_rows() -> None:
         projections_seed_module.AsyncSessionLocal = seed_session_factory
 
         try:
-            assert await seed_players() == 10
-            assert await seed_projections() == 10
+            assert await seed_players() == len(DEVELOPMENT_PLAYER_FIXTURES)
+            assert await seed_projections() == len(DEVELOPMENT_PLAYER_FIXTURES)
             async with seed_session_factory() as session:
                 source_id = await session.scalar(
                     text("SELECT id FROM projection_sources WHERE key = 'manual'")
@@ -438,7 +439,7 @@ async def test_seed_is_idempotent_and_keeps_unrelated_projection_rows() -> None:
                 )
                 await session.commit()
 
-            assert await seed_projections() == 10
+            assert await seed_projections() == len(DEVELOPMENT_PLAYER_FIXTURES)
         finally:
             players_seed_module.AsyncSessionLocal = original_player_session_factory
             projections_seed_module.AsyncSessionLocal = original_projection_session_factory
@@ -451,7 +452,7 @@ async def test_seed_is_idempotent_and_keeps_unrelated_projection_rows() -> None:
 
         assert source_count == 1
         assert set_count == 2
-        assert row_count == 10
+        assert row_count == len(DEVELOPMENT_PLAYER_FIXTURES)
     finally:
         if "schema_engine" in locals():
             await schema_engine.dispose()

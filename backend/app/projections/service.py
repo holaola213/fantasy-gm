@@ -1,22 +1,8 @@
-from decimal import Decimal
-
 from app.leagues.model import League
 from app.projections.model import PlayerProjection, ProjectionSet, ProjectionSource
 from app.projections.repository import ProjectionRepository
 from app.projections.schemas import ProjectionPlayerRead, SortDirection, SortField
-
-
-STAT_TO_SCORING_KEY = {
-    "fgm": "FGM",
-    "fga": "FGA",
-    "ftm": "FTM",
-    "fta": "FTA",
-    "rebounds": "REB",
-    "assists": "AST",
-    "steals": "STL",
-    "blocks": "BLK",
-    "turnovers": "TO",
-}
+from app.shared.scoring import FantasyScorer
 
 
 class ProjectionSetNotFoundError(Exception):
@@ -81,9 +67,9 @@ class ProjectionService:
             limit=fetch_limit,
             offset=fetch_offset,
         )
-        scoring_rules = self._scoring_rules_by_key(league)
+        scorer = FantasyScorer(league.scoring_rules)
         items = [
-            self._build_projection_player_read(projection, player, scoring_rules)
+            self._build_projection_player_read(projection, player, scorer)
             for projection, player in rows
         ]
         if sort in {"fantasy_points_per_game", "projected_fantasy_points"}:
@@ -97,19 +83,13 @@ class ProjectionService:
             items = items[offset : offset + limit]
         return items, total
 
-    def _scoring_rules_by_key(self, league: League) -> dict[str, Decimal]:
-        return {rule.stat_key: rule.points for rule in league.scoring_rules}
-
     def _build_projection_player_read(
         self,
         projection: PlayerProjection,
         player,
-        scoring_rules: dict[str, Decimal],
+        scorer: FantasyScorer,
     ) -> ProjectionPlayerRead:
-        fantasy_points_per_game = self._fantasy_points_per_game(
-            projection,
-            scoring_rules,
-        )
+        fantasy_points_per_game = scorer.fantasy_points_per_game(projection)
         return ProjectionPlayerRead(
             player_id=player.id,
             full_name=player.full_name,
@@ -129,15 +109,3 @@ class ProjectionService:
             fantasy_points_per_game=fantasy_points_per_game,
             projected_fantasy_points=fantasy_points_per_game * projection.games,
         )
-
-    def _fantasy_points_per_game(
-        self,
-        projection: PlayerProjection,
-        scoring_rules: dict[str, Decimal],
-    ) -> Decimal:
-        total = Decimal("0")
-        for stat_name, scoring_key in STAT_TO_SCORING_KEY.items():
-            stat_value = getattr(projection, stat_name)
-            scoring_value = scoring_rules.get(scoring_key, Decimal("0"))
-            total += stat_value * scoring_value
-        return total

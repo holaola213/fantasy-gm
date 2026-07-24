@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.leagues.repository import LeagueRepository
 from app.leagues.schemas import LeagueRead, LeagueUpdate
 from app.leagues.service import (
+    LeagueConfigurationLockedError,
     LeagueNotFoundError,
     LeaguePersistenceError,
     LeagueService,
@@ -43,6 +44,11 @@ async def put_league(
 ) -> LeagueRead:
     try:
         league = await service.replace_league(payload)
+    except LeagueConfigurationLockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="league configuration is locked while a draft is active",
+        ) from exc
     except LeaguePersistenceError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
