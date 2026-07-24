@@ -12,6 +12,7 @@ from app.shared.config.settings import get_settings
 from app.shared.database.base import Base
 from app.leagues import model  # noqa: F401
 from app.players import model  # noqa: F401
+from app.projections import model  # noqa: F401
 
 config = context.config
 

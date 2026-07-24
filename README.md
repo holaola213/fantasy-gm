@@ -7,6 +7,8 @@ Milestone 1 adds the Players vertical slice with a deterministic local fixture
 dataset.
 Milestone 2 adds the singleton League Configuration slice for local ESPN points
 league settings.
+Milestone 3 adds normalized season player projections and league-scored
+projection display.
 
 Existing product and architecture documentation lives under `docs/` and
 `research/`.
@@ -111,6 +113,24 @@ docker compose run --rm backend python -m app.leagues.seed
 The seed is idempotent and does not delete unrelated scoring-rule or roster-slot
 rows.
 
+## Seed Local Projections
+
+The projections seed command inserts or updates one deterministic manual local
+development projection source and one manual season projection set. Fixture
+values are local development data. Future real imports should create new
+immutable projection sets rather than updating historical imported sets.
+
+Run the player and league seeds before projection scoring:
+
+```powershell
+docker compose run --rm backend python -m app.players.seed
+docker compose run --rm backend python -m app.leagues.seed
+docker compose run --rm backend python -m app.projections.seed
+```
+
+The projection seed is idempotent and does not delete unrelated projection
+sources, projection sets, or projection rows.
+
 ## Players API
 
 List players:
@@ -161,3 +181,38 @@ Invoke-RestMethod "http://localhost:8000/league" -Method Put -ContentType "appli
 `PUT /league` replaces the singleton league, scoring rules, and roster slots in
 one database transaction. The frontend exposes this through the League Settings
 view at `http://localhost:5173`.
+
+## Projections API
+
+List projection sources and sets:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/projection-sources"
+Invoke-RestMethod "http://localhost:8000/projection-sets"
+```
+
+Get one projection set:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/projection-sets/1"
+```
+
+List projected players scored with the current singleton league configuration:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/projection-sets/1/players?sort=projected_fantasy_points&direction=desc"
+```
+
+Supported player-projection filters are `search`, `team`, `position`, `limit`,
+`offset`, `sort`, and `direction`. Public sort keys include
+`minutes_per_game`, `fantasy_points_per_game`, and
+`projected_fantasy_points`.
+
+If the singleton league configuration is missing, projected-player scoring
+returns HTTP 409:
+
+```json
+{
+  "detail": "league configuration required"
+}
+```
