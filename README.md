@@ -216,3 +216,16 @@ returns HTTP 409:
   "detail": "league configuration required"
 }
 ```
+
+## Projection Scoring Note
+
+Fantasy points are derived from the current singleton league scoring rules, not
+stored on projection rows. Projection sorting by `fantasy_points_per_game` or
+`projected_fantasy_points` currently calculates the matching rows in the
+application and sorts them in memory. That is intentional and acceptable for the
+current NBA-scale dataset. A larger future version may move this to
+database-side optimization or precomputed valuation data.
+
+The projection scoring logic should stay local to the projections feature until
+a second feature, such as replacement-level valuation or roster analysis, needs
+the same calculation.

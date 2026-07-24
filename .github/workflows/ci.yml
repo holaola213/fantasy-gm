@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config
+
+      - name: Build services
+        run: docker compose build
+
+      - name: Start database
+        run: docker compose up -d db
+
+      - name: Run backend tests
+        run: docker compose run --rm backend pytest
+
+      - name: Build frontend
+        run: docker compose run --rm frontend npm run build
+
+      - name: Verify Alembic migrations
+        run: |
+          docker compose run --rm backend alembic downgrade base
+          docker compose run --rm backend alembic upgrade head
+
+      - name: Stop services
+        if: always()
+        run: docker compose down -v
