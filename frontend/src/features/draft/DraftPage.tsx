@@ -84,6 +84,105 @@ type AvailablePlayerResponse = {
   offset: number;
 };
 
+type SlotInstance = {
+  slot: string;
+  slot_index: number;
+};
+
+type AssistantReason = {
+  code:
+    | "BEST_AVAILABLE"
+    | "BEST_AT_POSITION"
+    | "FILLS_OPEN_SLOT"
+    | "FILLS_RESTRICTIVE_SLOT"
+    | "MULTI_SLOT_FLEXIBILITY";
+  position: string | null;
+  slots: SlotInstance[];
+};
+
+type AssistantPlayer = {
+  player_id: number;
+  player_name: string;
+  team: string | null;
+  primary_position: string | null;
+  eligible_positions: string[];
+  overall_rank: number | null;
+  overall_vor: string | null;
+  best_value_position: string | null;
+  fantasy_points_per_game: string;
+  projected_fantasy_points: string;
+  position: string | null;
+  position_rank: number | null;
+  position_vor: string | null;
+  matching_open_slots: SlotInstance[];
+  reasons: AssistantReason[];
+};
+
+type RosterSummary = {
+  active_slots_total: number;
+  active_slots_filled: number;
+  active_slots_unfilled: number;
+  bench_slots_total: number;
+  bench_slots_filled: number;
+  bench_slots_remaining: number;
+  draftable_roster_capacity: number;
+  players_drafted: number;
+  roster_spots_remaining: number;
+  assignments: {
+    draft_pick_id: number;
+    player_id: number;
+    player_name: string;
+    eligible_positions: string[];
+    assigned_slot: string;
+    slot_index: number;
+    projected_fantasy_points: string | null;
+  }[];
+  bench_assignments: {
+    draft_pick_id: number;
+    player_id: number;
+    player_name: string;
+    eligible_positions: string[];
+    bench_index: number;
+    projected_fantasy_points: string | null;
+  }[];
+  unfilled_slots: SlotInstance[];
+  unassigned_players: {
+    draft_pick_id: number;
+    player_id: number;
+    player_name: string;
+    eligible_positions: string[];
+    reason: string;
+    projected_fantasy_points: string | null;
+  }[];
+};
+
+type DraftAssistant = {
+  draft_id: number;
+  status: "in_progress";
+  current_round: number;
+  current_overall_pick: number;
+  on_clock_team: {
+    fantasy_team_id: number;
+    name: string;
+    draft_position: number;
+  } | null;
+  is_user_on_clock: boolean;
+  user_team: {
+    fantasy_team_id: number;
+    name: string;
+    draft_position: number;
+    players_drafted: number;
+    roster_spots_remaining: number;
+  };
+  roster_summary: RosterSummary;
+  best_available: AssistantPlayer[];
+  best_by_position: {
+    position: string;
+    items: AssistantPlayer[];
+  }[];
+  roster_fit_options: AssistantPlayer[];
+};
+
 type TeamSetup = {
   name: string;
   draft_position: number;
@@ -97,6 +196,7 @@ export function DraftPage() {
   const [draftName, setDraftName] = useState("2026 League Draft");
   const [userDraftPosition, setUserDraftPosition] = useState(1);
   const [availablePlayers, setAvailablePlayers] = useState<AvailablePlayer[]>([]);
+  const [assistant, setAssistant] = useState<DraftAssistant | null>(null);
   const [availableTotal, setAvailableTotal] = useState(0);
   const [search, setSearch] = useState("");
   const [team, setTeam] = useState("");
@@ -105,6 +205,7 @@ export function DraftPage() {
   const [direction, setDirection] = useState<SortDirection>("desc");
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingAvailable, setIsLoadingAvailable] = useState(false);
+  const [isLoadingAssistant, setIsLoadingAssistant] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
@@ -117,6 +218,7 @@ export function DraftPage() {
     if (!draft || draft.status === "setup") {
       setAvailablePlayers([]);
       setAvailableTotal(0);
+      setAssistant(null);
       return;
     }
 
@@ -172,6 +274,52 @@ export function DraftPage() {
       controller.abort();
     };
   }, [draft, search, team, position, sort, direction]);
+
+  useEffect(() => {
+    if (!draft || draft.status !== "in_progress") {
+      setAssistant(null);
+      return;
+    }
+
+    let isMounted = true;
+    const controller = new AbortController();
+
+    async function loadAssistant() {
+      setIsLoadingAssistant(true);
+      try {
+        const response = await fetch("/api/draft/assistant", {
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error("Draft assistant request failed");
+        }
+        const data = (await response.json()) as DraftAssistant;
+        if (isMounted) {
+          setAssistant(data);
+          setErrorMessage(null);
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        if (isMounted) {
+          setAssistant(null);
+          setErrorMessage("Unable to load draft assistant.");
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingAssistant(false);
+        }
+      }
+    }
+
+    void loadAssistant();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, [draft]);
 
   const pickedByTeam = useMemo(() => {
     const grouped = new Map<number, DraftPick[]>();
@@ -486,22 +634,30 @@ export function DraftPage() {
           <div className="board-layout">
             <section>
               {draft.status === "in_progress" ? (
-                <AvailablePlayersTable
-                  direction={direction}
-                  isLoading={isLoadingAvailable}
-                  isSaving={isSaving}
-                  players={availablePlayers}
-                  position={position}
-                  search={search}
-                  sort={sort}
-                  team={team}
-                  total={availableTotal}
-                  onDraftPlayer={(playerId) => void draftPlayer(playerId)}
-                  onPositionChange={setPosition}
-                  onSearchChange={setSearch}
-                  onSort={changeSort}
-                  onTeamChange={setTeam}
-                />
+                <>
+                  <DraftAssistantPanel
+                    assistant={assistant}
+                    isLoading={isLoadingAssistant}
+                    isSaving={isSaving}
+                    onDraftPlayer={(playerId) => void draftPlayer(playerId)}
+                  />
+                  <AvailablePlayersTable
+                    direction={direction}
+                    isLoading={isLoadingAvailable}
+                    isSaving={isSaving}
+                    players={availablePlayers}
+                    position={position}
+                    search={search}
+                    sort={sort}
+                    team={team}
+                    total={availableTotal}
+                    onDraftPlayer={(playerId) => void draftPlayer(playerId)}
+                    onPositionChange={setPosition}
+                    onSearchChange={setSearch}
+                    onSort={changeSort}
+                    onTeamChange={setTeam}
+                  />
+                </>
               ) : null}
               <DraftPicksTable picks={board.picks} />
             </section>
@@ -536,6 +692,184 @@ export function DraftPage() {
         </>
       ) : null}
     </div>
+  );
+}
+
+function DraftAssistantPanel({
+  assistant,
+  isLoading,
+  isSaving,
+  onDraftPlayer,
+}: {
+  assistant: DraftAssistant | null;
+  isLoading: boolean;
+  isSaving: boolean;
+  onDraftPlayer: (playerId: number) => void;
+}) {
+  if (isLoading) {
+    return <p className="state-message">Loading draft assistant...</p>;
+  }
+  if (!assistant) {
+    return null;
+  }
+  return (
+    <section className="assistant-panel" aria-labelledby="draft-assistant-heading">
+      <div className="section-header">
+        <h2 id="draft-assistant-heading">Draft Assistant</h2>
+      </div>
+      <div className="summary-grid">
+        <div>
+          <span>Current Pick</span>
+          <strong>
+            Round {assistant.current_round}, Pick {assistant.current_overall_pick}
+          </strong>
+        </div>
+        <div>
+          <span>On the Clock</span>
+          <strong>{assistant.on_clock_team?.name ?? "None"}</strong>
+        </div>
+        <div>
+          <span>Your Turn</span>
+          <strong>{assistant.is_user_on_clock ? "Yes" : "No"}</strong>
+        </div>
+        <div>
+          <span>Roster Spots</span>
+          <strong>{assistant.user_team.roster_spots_remaining}</strong>
+        </div>
+      </div>
+
+      <div className="assistant-roster">
+        <div>
+          <h3>Your Roster</h3>
+          <p>
+            Active {assistant.roster_summary.active_slots_filled} /{" "}
+            {assistant.roster_summary.active_slots_total}, Bench{" "}
+            {assistant.roster_summary.bench_slots_filled} /{" "}
+            {assistant.roster_summary.bench_slots_total}
+          </p>
+          <p>
+            Open active slots:{" "}
+            {formatSlots(assistant.roster_summary.unfilled_slots) || "None"}
+          </p>
+          {assistant.roster_summary.assignments.length > 0 ? (
+            <ul>
+              {assistant.roster_summary.assignments.map((assignment) => (
+                <li key={assignment.draft_pick_id}>
+                  {formatSlot({
+                    slot: assignment.assigned_slot,
+                    slot_index: assignment.slot_index,
+                  })}
+                  : {assignment.player_name}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+        {assistant.roster_summary.unassigned_players.length > 0 ? (
+          <div>
+            <h3>Unassigned</h3>
+            <ul>
+              {assistant.roster_summary.unassigned_players.map((player) => (
+                <li key={player.draft_pick_id}>
+                  {player.player_name}: {player.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+
+      <AssistantOptionSection
+        title="Best Available"
+        players={assistant.best_available}
+        isSaving={isSaving}
+        onDraftPlayer={onDraftPlayer}
+      />
+      <AssistantOptionSection
+        title="Roster Fits"
+        players={assistant.roster_fit_options}
+        isSaving={isSaving}
+        onDraftPlayer={onDraftPlayer}
+      />
+      <div className="assistant-positions">
+        {assistant.best_by_position.map((section) => (
+          <AssistantOptionSection
+            key={section.position}
+            title={`${section.position} Options`}
+            players={section.items}
+            isSaving={isSaving}
+            onDraftPlayer={onDraftPlayer}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AssistantOptionSection({
+  title,
+  players,
+  isSaving,
+  onDraftPlayer,
+}: {
+  title: string;
+  players: AssistantPlayer[];
+  isSaving: boolean;
+  onDraftPlayer: (playerId: number) => void;
+}) {
+  return (
+    <section className="assistant-section">
+      <h3>{title}</h3>
+      {players.length === 0 ? (
+        <p className="state-message">No options in this section.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th>Team</th>
+              <th>Eligibility</th>
+              <th>Rank</th>
+              <th>Overall VOR</th>
+              <th>Projected Total</th>
+              <th>Reasons</th>
+              <th>Pick</th>
+            </tr>
+          </thead>
+          <tbody>
+            {players.map((player) => (
+              <tr key={`${title}-${player.player_id}-${player.position ?? "overall"}`}>
+                <td>{player.player_name}</td>
+                <td>{player.team ?? "Unsigned"}</td>
+                <td>{player.eligible_positions.join(", ") || "None"}</td>
+                <td>{player.position_rank ?? player.overall_rank ?? "None"}</td>
+                <td>{formatNumber(player.position_vor ?? player.overall_vor)}</td>
+                <td>{formatNumber(player.projected_fantasy_points)}</td>
+                <td>
+                  <div className="reason-list">
+                    {player.reasons.map((reason, index) => (
+                      <span className="reason-pill" key={`${reason.code}-${index}`}>
+                        {formatReason(reason)}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td>
+                  <button
+                    aria-label={`Draft ${player.player_name}`}
+                    disabled={isSaving}
+                    onClick={() => onDraftPlayer(player.player_id)}
+                    type="button"
+                  >
+                    Draft
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
 
@@ -866,6 +1200,38 @@ function defaultTeams(teamCount: number): TeamSetup[] {
     name: `Team ${index + 1}`,
     draft_position: index + 1,
   }));
+}
+
+function formatReason(reason: AssistantReason) {
+  if (reason.code === "BEST_AVAILABLE") {
+    return "Top overall value";
+  }
+  if (reason.code === "BEST_AT_POSITION") {
+    return `Top available ${reason.position}`;
+  }
+  if (reason.code === "FILLS_RESTRICTIVE_SLOT") {
+    return `Fills an open ${formatSlots(reason.slots)} slot`;
+  }
+  if (reason.code === "MULTI_SLOT_FLEXIBILITY") {
+    return "Fits multiple open slots";
+  }
+  return "Matches an open roster slot";
+}
+
+function formatSlots(slots: SlotInstance[]) {
+  return slots.map(formatSlot).join(", ");
+}
+
+function formatSlot(slot: SlotInstance) {
+  const label =
+    slot.slot === "G"
+      ? "Guard"
+      : slot.slot === "F"
+        ? "Forward"
+        : slot.slot === "UTIL"
+          ? "Any active position"
+          : slot.slot;
+  return `${label} ${slot.slot_index}`;
 }
 
 function formatNumber(value: string | null) {

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.drafts.router import router as drafts_router
+from app.draft_assistant.router import router as draft_assistant_router
 from app.health.router import router as health_router
 from app.leagues.router import router as leagues_router
 from app.players.router import router as players_router
@@ -13,4 +14,5 @@ app.include_router(leagues_router)
 app.include_router(players_router)
 app.include_router(projections_router)
 app.include_router(drafts_router)
+app.include_router(draft_assistant_router)
 app.include_router(valuations_router)

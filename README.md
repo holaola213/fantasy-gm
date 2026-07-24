@@ -421,3 +421,85 @@ block league configuration changes.
 
 Milestone 5 does not provide draft recommendations, automatic roster-slot
 assignment, historical draft browsing, or live ESPN synchronization.
+
+## Draft Assistant MVP
+
+Milestone 6 adds a compact deterministic Draft Assistant to the Draft page during
+an in-progress draft. It surfaces several reasonable options without claiming
+there is one objectively correct pick.
+
+Get the assistant dashboard:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/draft/assistant"
+```
+
+Optional query parameters:
+
+- `limit_per_section`: number of options per section, default `5`, maximum `10`
+- `include_assignments`: include detailed dynamic roster assignments, default `true`
+
+The assistant requires an in-progress draft. If no draft exists, the draft is
+still in setup, or the draft is completed, the API returns:
+
+```json
+{
+  "detail": "active draft required"
+}
+```
+
+The assistant remains available when another fantasy team is on the clock. The
+response includes `is_user_on_clock` so the UI can label the state clearly.
+
+### Assistant Sections
+
+Best Available lists the highest-ranked available players by the existing
+full-pool valuation ranks from Milestone 5.
+
+Best by Position lists top available players for `PG`, `SG`, `SF`, `PF`, and `C`
+using position-specific VOR and position rank. A multi-position player may appear
+in more than one position list.
+
+Roster Fits lists available players who can fill one or more open active roster
+slots. It preserves Best Available ordering and does not apply a combined
+recommendation score or arbitrary need bonus.
+
+The full Available Player Values table remains available below the assistant for
+complete browsing, filtering, and sorting.
+
+### Dynamic Roster Assignment
+
+Drafted players are assigned to roster slots dynamically for assistant display
+only. The assignment is not persisted and can be recalculated after each pick or
+undo.
+
+The assistant assigns user-team players to active slots:
+
+- `PG`, `SG`, `SF`, `PF`, and `C` accept only matching base eligibility.
+- `G` accepts `PG` or `SG`.
+- `F` accepts `SF` or `PF`.
+- `UTIL` accepts `PG`, `SG`, `SF`, `PF`, or `C`.
+- `BE` is bench capacity and does not create positional roster-fit needs.
+- `IR` is ignored for normal draft-assistant capacity.
+
+The assignment is exact and deterministic. It maximizes active slots filled,
+then maximizes projected fantasy points assigned to active slots, then uses
+stable eligibility, slot, player-name, and player-id tie-breakers. Players
+without eligibility are shown as unassigned and are not silently assigned from
+`primary_position`.
+
+### Reason Codes
+
+The backend returns structured reason metadata. The frontend maps it to concise
+labels:
+
+- `BEST_AVAILABLE`: Top overall value
+- `BEST_AT_POSITION`: Top available position option
+- `FILLS_OPEN_SLOT`: Matches an open roster slot
+- `FILLS_RESTRICTIVE_SLOT`: Fills an open `PG`, `SG`, `SF`, `PF`, or `C` slot
+- `MULTI_SLOT_FLEXIBILITY`: Fits multiple open slots
+
+Milestone 6 does not use a blended assistant score, future-pick prediction,
+advanced scarcity forecasting, opponent modeling, ADP, auction values,
+simulations, draft grades, automated drafting, or generated natural-language
+strategy. Those are deferred to later milestones.
