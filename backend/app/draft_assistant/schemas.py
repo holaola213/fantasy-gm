@@ -8,10 +8,21 @@ from app.drafts.schemas import PositionKey
 ReasonCode = Literal[
     "BEST_AVAILABLE",
     "BEST_AT_POSITION",
+    "BEYOND_NEXT_PICK_WINDOW",
     "FILLS_OPEN_SLOT",
     "FILLS_RESTRICTIVE_SLOT",
+    "INSIDE_NEXT_PICK_WINDOW",
+    "LARGE_VALUE_DROP",
+    "LIMITED_POSITION_DEPTH",
     "MULTI_SLOT_FLEXIBILITY",
+    "NEAR_NEXT_PICK_WINDOW",
+    "NO_FUTURE_USER_PICK",
+    "POSITION_DEPTH_AVAILABLE",
+    "POSITION_VALUE_DROP",
+    "USER_ON_CLOCK",
 ]
+AvailabilityOutlook = Literal["UNLIKELY_TO_RETURN", "AT_RISK", "COULD_RETURN"]
+ScarcitySeverity = Literal["HIGH", "MEDIUM", "LOW"]
 SlotKey = Literal["PG", "SG", "SF", "PF", "C", "G", "F", "UTIL", "BE"]
 
 
@@ -21,6 +32,13 @@ class DecimalStringMixin(BaseModel):
         "fantasy_points_per_game",
         "overall_vor",
         "position_vor",
+        "top_position_vor",
+        "cutoff_position_vor",
+        "projected_vor_drop",
+        "meaningful_value_drop",
+        "before_overall_vor",
+        "after_overall_vor",
+        "gap",
         check_fields=False,
         when_used="json",
     )
@@ -119,6 +137,68 @@ class BestByPositionRead(BaseModel):
     items: list[AssistantPlayerRead]
 
 
+class NextUserPickRead(BaseModel):
+    next_overall_pick: int = Field(ge=1)
+    next_round: int = Field(ge=1)
+    next_pick_in_round: int = Field(ge=1)
+    draft_position: int = Field(ge=1)
+    picks_until: int = Field(ge=0)
+    is_user_on_clock: bool
+    is_consecutive_turn: bool
+    turn_pick_number: int = Field(ge=1)
+    consecutive_pick_numbers: list[int]
+    consecutive_pick_overalls: list[int]
+
+
+class AvailabilityOutlookRead(DecimalStringMixin):
+    player_id: int
+    player_name: str
+    team: str | None
+    eligible_positions: list[PositionKey]
+    overall_rank: int | None
+    available_rank: int = Field(ge=1)
+    overall_vor: Decimal | None
+    projected_fantasy_points: Decimal
+    outlook: AvailabilityOutlook
+    reasons: list[AssistantReasonRead]
+
+
+class PositionScarcityRead(DecimalStringMixin):
+    position: PositionKey
+    top_player_id: int | None
+    top_player_name: str | None
+    top_position_vor: Decimal | None
+    cutoff_player_id: int | None
+    cutoff_player_name: str | None
+    cutoff_position_vor: Decimal | None
+    projected_vor_drop: Decimal | None
+    players_before_next_pick: int = Field(ge=0)
+    meaningful_options_remaining: int = Field(ge=0)
+    severity: ScarcitySeverity
+    reasons: list[AssistantReasonRead]
+
+
+class ValueDropRead(DecimalStringMixin):
+    scan_limit: int = Field(ge=1)
+    meaningful_value_drop: Decimal
+    drop_after_available_rank: int = Field(ge=1)
+    before_player_id: int
+    before_player_name: str
+    before_overall_vor: Decimal | None
+    after_player_id: int
+    after_player_name: str
+    after_overall_vor: Decimal | None
+    gap: Decimal
+    reasons: list[AssistantReasonRead]
+
+
+class DraftIntelligenceRead(BaseModel):
+    next_user_pick: NextUserPickRead | None
+    availability_outlook: list[AvailabilityOutlookRead]
+    positional_scarcity: list[PositionScarcityRead]
+    value_drop: ValueDropRead | None
+
+
 class DraftAssistantResponse(BaseModel):
     draft_id: int
     status: Literal["in_progress"]
@@ -131,3 +211,4 @@ class DraftAssistantResponse(BaseModel):
     best_available: list[AssistantPlayerRead]
     best_by_position: list[BestByPositionRead]
     roster_fit_options: list[AssistantPlayerRead]
+    intelligence: DraftIntelligenceRead

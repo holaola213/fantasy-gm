@@ -11,6 +11,9 @@ Milestone 3 adds normalized season player projections and league-scored
 projection display.
 Milestone 4 adds a manual snake draft.
 Milestone 5 adds dynamic league-specific player valuation over replacement.
+Milestone 6 adds a deterministic draft assistant.
+Milestone 7 adds derived draft intelligence for next-pick context,
+availability outlook, positional scarcity, and value-drop awareness.
 
 Existing product and architecture documentation lives under `docs/` and
 `research/`.
@@ -438,9 +441,9 @@ assignment, historical draft browsing, or live ESPN synchronization.
 
 ## Draft Assistant MVP
 
-Milestone 6 adds a compact deterministic Draft Assistant to the Draft page during
-an in-progress draft. It surfaces several reasonable options without claiming
-there is one objectively correct pick.
+Milestones 6 and 7 add a compact deterministic Draft Assistant to the Draft page
+during an in-progress draft. It surfaces several reasonable options and derived
+draft-context signals without claiming there is one objectively correct pick.
 
 Get the assistant dashboard:
 
@@ -464,6 +467,25 @@ still in setup, or the draft is completed, the API returns:
 
 The assistant remains available when another fantasy team is on the clock. The
 response includes `is_user_on_clock` so the UI can label the state clearly.
+
+Milestone 7 extends the same response with an `intelligence` object by default.
+The backend derives this from the current draft's snapshotted projection set and
+the existing valuation universe:
+
+- `next_user_pick`: the user's next scheduled snake-draft pick, picks until that
+  pick, and consecutive turn-pick context.
+- `availability_outlook`: top available players labeled as
+  `UNLIKELY_TO_RETURN`, `AT_RISK`, or `COULD_RETURN`.
+- `positional_scarcity`: base-position scarcity using position-specific VOR,
+  expected VOR drop before the next user pick, and remaining positive-VOR depth.
+- `value_drop`: the next meaningful overall VOR drop within the scanned
+  available-player window.
+
+Availability uses a fixed local deterministic buffer of 2 players beyond the
+next-pick window. A meaningful value drop is 10.00 season VOR points, scanned
+across the first 25 available ranked players. Positional scarcity uses 10.00 VOR
+for high-drop severity, 5.00 VOR for medium-drop severity, and 2 positive-VOR
+options as the low-depth threshold.
 
 ### Assistant Sections
 
@@ -512,8 +534,20 @@ labels:
 - `FILLS_OPEN_SLOT`: Matches an open roster slot
 - `FILLS_RESTRICTIVE_SLOT`: Fills an open `PG`, `SG`, `SF`, `PF`, or `C` slot
 - `MULTI_SLOT_FLEXIBILITY`: Fits multiple open slots
+- `USER_ON_CLOCK`: The user is currently on the clock
+- `INSIDE_NEXT_PICK_WINDOW`: Player falls inside the expected picks before the
+  user's next pick
+- `NEAR_NEXT_PICK_WINDOW`: Player is within the fixed risk buffer beyond the
+  next-pick window
+- `BEYOND_NEXT_PICK_WINDOW`: Player is outside the fixed risk buffer
+- `LARGE_VALUE_DROP`: A meaningful value drop follows this point
+- `POSITION_VALUE_DROP`: Positional VOR is expected to fall before the user's
+  next pick
+- `LIMITED_POSITION_DEPTH`: Few positive-VOR options remain at the position
+- `POSITION_DEPTH_AVAILABLE`: Position has lower current scarcity
+- `NO_FUTURE_USER_PICK`: No future user pick is scheduled
 
-Milestone 6 does not use a blended assistant score, future-pick prediction,
-advanced scarcity forecasting, opponent modeling, ADP, auction values,
-simulations, draft grades, automated drafting, or generated natural-language
-strategy. Those are deferred to later milestones.
+Milestone 7 does not use a blended assistant score, full tier modeling, opponent
+simulation, ADP, auction values, probability estimates, draft-run detection,
+draft grades, automated drafting, or generated natural-language strategy. Those
+are deferred to later milestones.

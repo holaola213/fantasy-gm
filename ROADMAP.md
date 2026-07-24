@@ -10,13 +10,14 @@ committed implementation promises.
 - Milestone 1 - Players
 - Milestone 2 - League Configuration
 - Milestone 3 - Normalized Player Projections
+- Milestone 4 - Draft State
+- Milestone 5 - Replacement-Level Valuation
+- Milestone 6 - Draft Assistant MVP
+- Milestone 7 - Draft Intelligence
 
 ## Next
 
-- Milestone 4 - Player Eligibility
-- Milestone 5 - Draft State
-- Milestone 6 - Replacement-Level Valuation
-- Milestone 7 - Usable Draft Assistant
+- Milestone 8 - Recommendation Logic
 
 ## Later
 

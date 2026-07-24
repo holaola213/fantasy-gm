@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from app.draft_assistant.availability import availability_outlooks
 from app.draft_assistant.repository import DraftAssistantRepository
 from app.draft_assistant.roster_assignment import (
-    ACTIVE_SLOT_KEYS,
     RESTRICTIVE_SLOT_KEYS,
     SlotInstance,
     UnsupportedRosterSlotError,
@@ -12,20 +12,31 @@ from app.draft_assistant.roster_assignment import (
     matching_open_slots,
 )
 from app.draft_assistant.schemas import (
+    AvailabilityOutlookRead,
     AssistantPlayerRead,
     AssistantReasonRead,
     AssistantTeamRead,
     BenchAssignmentRead,
     BestByPositionRead,
     DraftAssistantResponse,
+    DraftIntelligenceRead,
+    NextUserPickRead,
+    PositionScarcityRead,
     RosterAssignmentRead,
     RosterSummaryRead,
     SlotInstanceRead,
     UnassignedPlayerRead,
     UserTeamRead,
+    ValueDropRead,
 )
-from app.drafts.compatibility import snake_pick_details
+from app.draft_assistant.scarcity import positional_scarcity
+from app.draft_assistant.value_gaps import (
+    MEANINGFUL_VALUE_DROP,
+    next_meaningful_value_drop,
+)
+from app.drafts.compatibility import BASE_POSITION_ORDER, snake_pick_details
 from app.drafts.model import DraftPick, DraftSession, FantasyTeam
+from app.drafts.order import NextUserPickContext, next_user_pick_context
 from app.valuations.repository import ValuationRepository
 from app.valuations.schemas import PlayerValuationRead, PositionValueRead
 from app.valuations.service import (
@@ -34,9 +45,6 @@ from app.valuations.service import (
     ProjectionSetNotFoundError,
     ValuationService,
 )
-
-BASE_POSITION_ORDER = ["PG", "SG", "SF", "PF", "C"]
-
 
 class ActiveDraftRequiredError(Exception):
     pass
@@ -83,19 +91,26 @@ class DraftAssistantService:
             SlotInstance(slot=item.slot, slot_index=item.slot_index)
             for item in roster_summary.unfilled_slots
         ]
+        current_overall_pick = self._current_overall_pick(draft)
         current_round, _, draft_position = snake_pick_details(
-            self._current_overall_pick(draft),
+            current_overall_pick,
             draft.team_count,
         )
         on_clock_team = next(
             (team for team in draft.teams if team.draft_position == draft_position),
             None,
         )
+        next_pick = next_user_pick_context(
+            current_overall_pick=current_overall_pick,
+            team_count=draft.team_count,
+            rounds=draft.rounds,
+            user_draft_position=user_team.draft_position,
+        )
         return DraftAssistantResponse(
             draft_id=draft.id,
             status="in_progress",
             current_round=current_round,
-            current_overall_pick=self._current_overall_pick(draft),
+            current_overall_pick=current_overall_pick,
             on_clock_team=self._team_read(on_clock_team) if on_clock_team else None,
             is_user_on_clock=(
                 on_clock_team is not None and on_clock_team.id == user_team.id
@@ -124,6 +139,11 @@ class DraftAssistantService:
             roster_fit_options=self._roster_fits(
                 available=available,
                 open_slots=open_slots,
+                limit_per_section=limit_per_section,
+            ),
+            intelligence=self._intelligence(
+                available=available,
+                next_pick=next_pick,
                 limit_per_section=limit_per_section,
             ),
         )
@@ -287,6 +307,120 @@ class DraftAssistantService:
             )
             for item in matches[:limit_per_section]
         ]
+
+    def _intelligence(
+        self,
+        *,
+        available: list[PlayerValuationRead],
+        next_pick: NextUserPickContext | None,
+        limit_per_section: int,
+    ) -> DraftIntelligenceRead:
+        return DraftIntelligenceRead(
+            next_user_pick=self._next_user_pick_read(next_pick),
+            availability_outlook=[
+                AvailabilityOutlookRead(
+                    player_id=item.player.player_id,
+                    player_name=item.player.player_name,
+                    team=item.player.team,
+                    eligible_positions=item.player.eligible_positions,
+                    overall_rank=item.player.overall_rank,
+                    available_rank=item.available_rank,
+                    overall_vor=item.player.overall_vor,
+                    projected_fantasy_points=item.player.projected_fantasy_points,
+                    outlook=item.outlook,
+                    reasons=[
+                        AssistantReasonRead(code=code)
+                        for code in item.reason_codes
+                    ],
+                )
+                for item in availability_outlooks(
+                    available=available,
+                    next_user_pick=next_pick,
+                    limit=limit_per_section,
+                )
+            ],
+            positional_scarcity=[
+                PositionScarcityRead(
+                    position=item.position,
+                    top_player_id=item.top_player.player_id if item.top_player else None,
+                    top_player_name=(
+                        item.top_player.player_name if item.top_player else None
+                    ),
+                    top_position_vor=(
+                        item.top_position_value.vor
+                        if item.top_position_value
+                        else None
+                    ),
+                    cutoff_player_id=(
+                        item.cutoff_player.player_id if item.cutoff_player else None
+                    ),
+                    cutoff_player_name=(
+                        item.cutoff_player.player_name if item.cutoff_player else None
+                    ),
+                    cutoff_position_vor=(
+                        item.cutoff_position_value.vor
+                        if item.cutoff_position_value
+                        else None
+                    ),
+                    projected_vor_drop=item.projected_vor_drop,
+                    players_before_next_pick=item.players_before_next_pick,
+                    meaningful_options_remaining=item.meaningful_options_remaining,
+                    severity=item.severity,
+                    reasons=[
+                        AssistantReasonRead(code=code)
+                        for code in item.reason_codes
+                    ],
+                )
+                for item in positional_scarcity(
+                    available=available,
+                    next_user_pick=next_pick,
+                )
+            ],
+            value_drop=self._value_drop_read(available),
+        )
+
+    def _next_user_pick_read(
+        self,
+        next_pick: NextUserPickContext | None,
+    ) -> NextUserPickRead | None:
+        if next_pick is None:
+            return None
+        return NextUserPickRead(
+            next_overall_pick=next_pick.next_overall_pick,
+            next_round=next_pick.next_round,
+            next_pick_in_round=next_pick.next_pick_in_round,
+            draft_position=next_pick.draft_position,
+            picks_until=next_pick.picks_until,
+            is_user_on_clock=next_pick.is_user_on_clock,
+            is_consecutive_turn=next_pick.is_consecutive_turn,
+            turn_pick_number=next_pick.turn_pick_number,
+            consecutive_pick_numbers=list(next_pick.consecutive_pick_numbers),
+            consecutive_pick_overalls=list(next_pick.consecutive_pick_overalls),
+        )
+
+    def _value_drop_read(
+        self,
+        available: list[PlayerValuationRead],
+    ) -> ValueDropRead | None:
+        value_drop = next_meaningful_value_drop(available)
+        if value_drop is None:
+            return None
+        return ValueDropRead(
+            scan_limit=value_drop.scan_limit,
+            meaningful_value_drop=MEANINGFUL_VALUE_DROP,
+            drop_after_available_rank=value_drop.drop_after_available_rank,
+            before_player_id=value_drop.before_player.player_id,
+            before_player_name=value_drop.before_player.player_name,
+            before_overall_vor=value_drop.before_player.overall_vor,
+            after_player_id=value_drop.after_player.player_id,
+            after_player_name=value_drop.after_player.player_name,
+            after_overall_vor=value_drop.after_player.overall_vor,
+            gap=value_drop.gap,
+            reasons=[
+                AssistantReasonRead(code=code)
+                for code in value_drop.reason_codes
+            ],
+        )
 
     def _assistant_item(
         self,
