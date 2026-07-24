@@ -6,22 +6,38 @@ from pydantic import BaseModel, Field, field_serializer
 from app.drafts.schemas import PositionKey
 
 ReasonCode = Literal[
+    "AT_RISK_BEFORE_NEXT_PICK",
     "BEST_AVAILABLE",
+    "BEST_AVAILABLE_VALUE",
     "BEST_AT_POSITION",
     "BEYOND_NEXT_PICK_WINDOW",
+    "BEFORE_MEANINGFUL_VALUE_DROP",
+    "BENCH_ONLY_FIT",
+    "COULD_RETURN_LATER",
     "FILLS_OPEN_SLOT",
+    "FILLS_FLEX_SLOT",
     "FILLS_RESTRICTIVE_SLOT",
+    "FILLS_RESTRICTIVE_STARTER_SLOT",
+    "IMPROVES_ACTIVE_LINEUP",
     "INSIDE_NEXT_PICK_WINDOW",
     "LARGE_VALUE_DROP",
     "LIMITED_POSITION_DEPTH",
+    "MISSING_CONTEXT",
     "MULTI_SLOT_FLEXIBILITY",
+    "MULTI_POSITION_FLEXIBILITY",
     "NEAR_NEXT_PICK_WINDOW",
     "NO_FUTURE_USER_PICK",
     "POSITION_DEPTH_AVAILABLE",
     "POSITION_VALUE_DROP",
+    "POSITION_ALREADY_DEEP",
+    "SIGNIFICANT_VALUE_REACH",
+    "STRONG_VALUE",
+    "UNLIKELY_TO_RETURN",
     "USER_ON_CLOCK",
 ]
 AvailabilityOutlook = Literal["UNLIKELY_TO_RETURN", "AT_RISK", "COULD_RETURN"]
+RecommendationContext = Literal["CLOSE_VALUE", "FALLBACK_VALUE"]
+RecommendationAssignmentType = Literal["active", "bench", "unassigned"]
 ScarcitySeverity = Literal["HIGH", "MEDIUM", "LOW"]
 SlotKey = Literal["PG", "SG", "SF", "PF", "C", "G", "F", "UTIL", "BE"]
 
@@ -39,6 +55,13 @@ class DecimalStringMixin(BaseModel):
         "before_overall_vor",
         "after_overall_vor",
         "gap",
+        "value_proximity_score",
+        "roster_fit_score",
+        "scarcity_score",
+        "availability_score",
+        "value_drop_score",
+        "flexibility_score",
+        "total_score",
         check_fields=False,
         when_used="json",
     )
@@ -199,6 +222,44 @@ class DraftIntelligenceRead(BaseModel):
     value_drop: ValueDropRead | None
 
 
+class RecommendationScoreBreakdownRead(DecimalStringMixin):
+    value_proximity_score: Decimal
+    roster_fit_score: Decimal
+    scarcity_score: Decimal
+    availability_score: Decimal
+    value_drop_score: Decimal
+    flexibility_score: Decimal
+    total_score: Decimal
+
+
+class RecommendationRosterFitRead(BaseModel):
+    assignment_type: RecommendationAssignmentType
+    assigned_slot: SlotKey | None
+    slot_index: int | None
+    eligible_roster_slots: list[SlotInstanceRead]
+
+
+class DraftRecommendationRead(DecimalStringMixin):
+    recommendation_rank: int = Field(ge=1)
+    recommendation_context: RecommendationContext
+    player_id: int
+    player_name: str
+    team: str | None
+    primary_position: str | None
+    eligible_positions: list[PositionKey]
+    overall_rank: int | None
+    overall_vor: Decimal
+    projected_fantasy_points: Decimal
+    projected_roster_assignment: RecommendationRosterFitRead
+    availability_outlook: AvailabilityOutlook | None
+    scarcity_position: PositionKey | None
+    scarcity_severity: ScarcitySeverity | None
+    explanation: str
+    reasons: list[AssistantReasonRead]
+    warnings: list[AssistantReasonRead]
+    score_breakdown: RecommendationScoreBreakdownRead | None
+
+
 class DraftAssistantResponse(BaseModel):
     draft_id: int
     status: Literal["in_progress"]
@@ -212,3 +273,4 @@ class DraftAssistantResponse(BaseModel):
     best_by_position: list[BestByPositionRead]
     roster_fit_options: list[AssistantPlayerRead]
     intelligence: DraftIntelligenceRead
+    recommendations: list[DraftRecommendationRead]

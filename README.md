@@ -14,6 +14,8 @@ Milestone 5 adds dynamic league-specific player valuation over replacement.
 Milestone 6 adds a deterministic draft assistant.
 Milestone 7 adds derived draft intelligence for next-pick context,
 availability outlook, positional scarcity, and value-drop awareness.
+Milestone 8 adds deterministic draft recommendations on top of those assistant
+signals.
 
 Existing product and architecture documentation lives under `docs/` and
 `research/`.
@@ -441,9 +443,10 @@ assignment, historical draft browsing, or live ESPN synchronization.
 
 ## Draft Assistant MVP
 
-Milestones 6 and 7 add a compact deterministic Draft Assistant to the Draft page
-during an in-progress draft. It surfaces several reasonable options and derived
-draft-context signals without claiming there is one objectively correct pick.
+Milestones 6 through 8 add a compact deterministic Draft Assistant to the Draft
+page during an in-progress draft. It surfaces several reasonable options,
+derived draft-context signals, and up to five recommended picks without claiming
+there is one objectively correct pick.
 
 Get the assistant dashboard:
 
@@ -486,6 +489,42 @@ next-pick window. A meaningful value drop is 10.00 season VOR points, scanned
 across the first 25 available ranked players. Positional scarcity uses 10.00 VOR
 for high-drop severity, 5.00 VOR for medium-drop severity, and 2 positive-VOR
 options as the low-depth threshold.
+
+Milestone 8 extends the same response with `recommendations` by default. The
+recommendation engine is deterministic and evaluates only currently available
+players that have both an overall VOR and at least one eligibility row. It uses
+the current draft's snapshotted projection set, current user roster assignment,
+availability outlook, positional scarcity, and value-drop signal.
+
+Recommendation candidates are grouped in two passes:
+
+- Close-value candidates are every recommendation-eligible player within 10.00
+  VOR of the best available player's overall VOR. These candidates receive a
+  score breakdown and may be reordered by value proximity, roster fit,
+  scarcity, availability, value-drop context, and useful roster flexibility.
+- Fallback-value candidates are the remaining top 10 recommendation-eligible
+  available players. They preserve best-available order, do not receive a score
+  breakdown, and cannot appear above close-value candidates.
+
+The API returns at most five recommendations. Close-value score components use
+Decimal arithmetic and are quantized to two decimals. The base value-proximity
+score maps a 0.00 VOR gap to 100.00 and a 10.00 VOR gap to 80.00. Positive
+context can add roster-fit, scarcity, availability, value-drop, and flexibility
+points; bench-only or unassigned roster fit can reduce the close-value score.
+
+Recommendation reason and warning codes are structured so the frontend can keep
+labels concise and cautious:
+
+- Positive signals include `BEST_AVAILABLE_VALUE`, `STRONG_VALUE`,
+  `FILLS_RESTRICTIVE_STARTER_SLOT`, `FILLS_FLEX_SLOT`,
+  `IMPROVES_ACTIVE_LINEUP`, `MULTI_POSITION_FLEXIBILITY`,
+  `LIMITED_POSITION_DEPTH`, `POSITION_VALUE_DROP`, `UNLIKELY_TO_RETURN`,
+  `AT_RISK_BEFORE_NEXT_PICK`, and `BEFORE_MEANINGFUL_VALUE_DROP`.
+- Warnings include `BENCH_ONLY_FIT`, `POSITION_ALREADY_DEEP`,
+  `COULD_RETURN_LATER`, `SIGNIFICANT_VALUE_REACH`, and `MISSING_CONTEXT`.
+
+Recommendation explanations are generated from fixed backend templates and avoid
+absolute claims such as guarantees, certainty, or definitive availability.
 
 ### Assistant Sections
 
@@ -547,7 +586,7 @@ labels:
 - `POSITION_DEPTH_AVAILABLE`: Position has lower current scarcity
 - `NO_FUTURE_USER_PICK`: No future user pick is scheduled
 
-Milestone 7 does not use a blended assistant score, full tier modeling, opponent
-simulation, ADP, auction values, probability estimates, draft-run detection,
-draft grades, automated drafting, or generated natural-language strategy. Those
-are deferred to later milestones.
+Milestone 8 does not use machine learning, Monte Carlo simulation, opponent
+prediction, probability estimates, ADP, auction values, full tiers, draft-run
+detection, automated drafting, persisted recommendation history, or full
+remaining-round optimization. Those are deferred to later milestones.

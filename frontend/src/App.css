@@ -362,6 +362,43 @@ td input {
   overflow-x: auto;
 }
 
+.recommendations-section td {
+  vertical-align: top;
+}
+
+.muted-detail {
+  color: #4f5f6d;
+  display: block;
+  font-size: 0.82rem;
+  margin-top: 4px;
+}
+
+.score-details {
+  color: #4f5f6d;
+  font-size: 0.82rem;
+  margin-top: 6px;
+}
+
+.score-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.score-details dl {
+  display: grid;
+  gap: 4px 10px;
+  grid-template-columns: auto 1fr;
+  margin: 8px 0 0;
+}
+
+.score-details dt {
+  font-weight: 700;
+}
+
+.score-details dd {
+  margin: 0;
+}
+
 .assistant-intelligence {
   display: grid;
   gap: 18px;
@@ -388,6 +425,12 @@ td input {
   font-size: 0.78rem;
   font-weight: 700;
   padding: 4px 8px;
+}
+
+.warning-pill {
+  background: #fff6e8;
+  border-color: #e3c58a;
+  color: #6f5515;
 }
 
 @media (max-width: 720px) {

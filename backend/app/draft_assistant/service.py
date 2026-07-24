@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from dataclasses import dataclass
 
 from app.draft_assistant.availability import availability_outlooks
+from app.draft_assistant.recommendations import RecommendationInput, recommend_players
 from app.draft_assistant.repository import DraftAssistantRepository
 from app.draft_assistant.roster_assignment import (
+    RosterAssignmentResult,
+    RosterPlayer,
     RESTRICTIVE_SLOT_KEYS,
     SlotInstance,
-    UnsupportedRosterSlotError,
     assign_roster,
     matching_open_slots,
 )
@@ -30,8 +32,10 @@ from app.draft_assistant.schemas import (
     ValueDropRead,
 )
 from app.draft_assistant.scarcity import positional_scarcity
+from app.draft_assistant.scarcity import PositionScarcity
 from app.draft_assistant.value_gaps import (
     MEANINGFUL_VALUE_DROP,
+    ValueDrop,
     next_meaningful_value_drop,
 )
 from app.drafts.compatibility import BASE_POSITION_ORDER, snake_pick_details
@@ -52,6 +56,12 @@ class ActiveDraftRequiredError(Exception):
 
 class UserFantasyTeamRequiredError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class UserRosterContext:
+    players: list[RosterPlayer]
+    assignment: RosterAssignmentResult
 
 
 class DraftAssistantService:
@@ -80,17 +90,6 @@ class DraftAssistantService:
         ]
         available = sorted(available, key=_best_available_key)
 
-        roster_summary = await self._roster_summary(
-            draft=draft,
-            league=league,
-            user_team=user_team,
-            valuations_by_player_id=valuations_by_player_id,
-            include_assignments=include_assignments,
-        )
-        open_slots = [
-            SlotInstance(slot=item.slot, slot_index=item.slot_index)
-            for item in roster_summary.unfilled_slots
-        ]
         current_overall_pick = self._current_overall_pick(draft)
         current_round, _, draft_position = snake_pick_details(
             current_overall_pick,
@@ -100,11 +99,53 @@ class DraftAssistantService:
             (team for team in draft.teams if team.draft_position == draft_position),
             None,
         )
+        is_user_on_clock = on_clock_team is not None and on_clock_team.id == user_team.id
         next_pick = next_user_pick_context(
             current_overall_pick=current_overall_pick,
             team_count=draft.team_count,
             rounds=draft.rounds,
             user_draft_position=user_team.draft_position,
+        )
+        roster_context = await self._user_roster_context(
+            draft=draft,
+            league=league,
+            user_team=user_team,
+            valuations_by_player_id=valuations_by_player_id,
+        )
+        roster_summary = self._roster_summary(
+            context=roster_context,
+            user_picks_count=len(self._user_picks(draft, user_team)),
+            include_assignments=include_assignments,
+        )
+        open_slots = [
+            SlotInstance(slot=item.slot, slot_index=item.slot_index)
+            for item in roster_summary.unfilled_slots
+        ]
+        availability = availability_outlooks(
+            available=available,
+            next_user_pick=next_pick,
+            limit=len(available),
+        )
+        scarcity = positional_scarcity(
+            available=available,
+            next_user_pick=next_pick,
+        )
+        value_drop = next_meaningful_value_drop(available)
+        recommendations = recommend_players(
+            RecommendationInput(
+                available=available,
+                current_roster_players=roster_context.players,
+                current_assignment=roster_context.assignment,
+                roster_slot_counts={
+                    slot.slot_key: slot.count for slot in league.roster_slots
+                },
+                availability_by_player_id={
+                    item.player.player_id: item for item in availability
+                },
+                scarcity_by_position={item.position: item for item in scarcity},
+                value_drop=value_drop,
+                is_user_on_clock=is_user_on_clock,
+            )
         )
         return DraftAssistantResponse(
             draft_id=draft.id,
@@ -112,9 +153,7 @@ class DraftAssistantService:
             current_round=current_round,
             current_overall_pick=current_overall_pick,
             on_clock_team=self._team_read(on_clock_team) if on_clock_team else None,
-            is_user_on_clock=(
-                on_clock_team is not None and on_clock_team.id == user_team.id
-            ),
+            is_user_on_clock=is_user_on_clock,
             user_team=UserTeamRead(
                 fantasy_team_id=user_team.id,
                 name=user_team.name,
@@ -142,10 +181,13 @@ class DraftAssistantService:
                 limit_per_section=limit_per_section,
             ),
             intelligence=self._intelligence(
-                available=available,
+                availability=availability,
+                scarcity=scarcity,
+                value_drop=value_drop,
                 next_pick=next_pick,
                 limit_per_section=limit_per_section,
             ),
+            recommendations=recommendations,
         )
 
     async def _valuation_universe(self, draft: DraftSession) -> list[PlayerValuationRead]:
@@ -163,15 +205,14 @@ class DraftAssistantService:
         )
         return items
 
-    async def _roster_summary(
+    async def _user_roster_context(
         self,
         *,
         draft: DraftSession,
         league,
         user_team: FantasyTeam,
         valuations_by_player_id: dict[int, PlayerValuationRead],
-        include_assignments: bool,
-    ) -> RosterSummaryRead:
+    ) -> UserRosterContext:
         user_picks = self._user_picks(draft, user_team)
         player_ids = [pick.player_id for pick in user_picks]
         eligibilities = await self.repository.get_eligibilities_by_player_ids(player_ids)
@@ -187,10 +228,20 @@ class DraftAssistantService:
             players=players,
             roster_slot_counts={slot.slot_key: slot.count for slot in league.roster_slots},
         )
+        return UserRosterContext(players=players, assignment=result)
+
+    def _roster_summary(
+        self,
+        *,
+        context: UserRosterContext,
+        user_picks_count: int,
+        include_assignments: bool,
+    ) -> RosterSummaryRead:
+        result = context.assignment
         active_filled = len(result.active_assignments)
         bench_filled = len(result.bench_assignments)
         roster_spots_remaining = max(
-            result.draftable_roster_capacity - len(user_picks), 0
+            result.draftable_roster_capacity - user_picks_count, 0
         )
         return RosterSummaryRead(
             active_slots_total=len(result.active_slots),
@@ -200,7 +251,7 @@ class DraftAssistantService:
             bench_slots_filled=bench_filled,
             bench_slots_remaining=max(result.bench_slots_total - bench_filled, 0),
             draftable_roster_capacity=result.draftable_roster_capacity,
-            players_drafted=len(user_picks),
+            players_drafted=user_picks_count,
             roster_spots_remaining=roster_spots_remaining,
             assignments=[
                 RosterAssignmentRead(
@@ -311,7 +362,9 @@ class DraftAssistantService:
     def _intelligence(
         self,
         *,
-        available: list[PlayerValuationRead],
+        availability,
+        scarcity: list[PositionScarcity],
+        value_drop: ValueDrop | None,
         next_pick: NextUserPickContext | None,
         limit_per_section: int,
     ) -> DraftIntelligenceRead:
@@ -333,11 +386,7 @@ class DraftAssistantService:
                         for code in item.reason_codes
                     ],
                 )
-                for item in availability_outlooks(
-                    available=available,
-                    next_user_pick=next_pick,
-                    limit=limit_per_section,
-                )
+                for item in availability[:limit_per_section]
             ],
             positional_scarcity=[
                 PositionScarcityRead(
@@ -371,12 +420,9 @@ class DraftAssistantService:
                         for code in item.reason_codes
                     ],
                 )
-                for item in positional_scarcity(
-                    available=available,
-                    next_user_pick=next_pick,
-                )
+                for item in scarcity
             ],
-            value_drop=self._value_drop_read(available),
+            value_drop=self._value_drop_read(value_drop),
         )
 
     def _next_user_pick_read(
@@ -400,9 +446,8 @@ class DraftAssistantService:
 
     def _value_drop_read(
         self,
-        available: list[PlayerValuationRead],
+        value_drop: ValueDrop | None,
     ) -> ValueDropRead | None:
-        value_drop = next_meaningful_value_drop(available)
         if value_drop is None:
             return None
         return ValueDropRead(

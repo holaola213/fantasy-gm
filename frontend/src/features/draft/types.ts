@@ -89,19 +89,33 @@ export type SlotInstance = {
 
 export type AssistantReason = {
   code:
+    | "AT_RISK_BEFORE_NEXT_PICK"
     | "BEST_AVAILABLE"
+    | "BEST_AVAILABLE_VALUE"
     | "BEST_AT_POSITION"
     | "BEYOND_NEXT_PICK_WINDOW"
+    | "BEFORE_MEANINGFUL_VALUE_DROP"
+    | "BENCH_ONLY_FIT"
+    | "COULD_RETURN_LATER"
+    | "FILLS_FLEX_SLOT"
     | "FILLS_OPEN_SLOT"
     | "FILLS_RESTRICTIVE_SLOT"
+    | "FILLS_RESTRICTIVE_STARTER_SLOT"
+    | "IMPROVES_ACTIVE_LINEUP"
     | "INSIDE_NEXT_PICK_WINDOW"
     | "LARGE_VALUE_DROP"
     | "LIMITED_POSITION_DEPTH"
+    | "MISSING_CONTEXT"
+    | "MULTI_POSITION_FLEXIBILITY"
     | "MULTI_SLOT_FLEXIBILITY"
     | "NEAR_NEXT_PICK_WINDOW"
     | "NO_FUTURE_USER_PICK"
     | "POSITION_DEPTH_AVAILABLE"
+    | "POSITION_ALREADY_DEEP"
     | "POSITION_VALUE_DROP"
+    | "SIGNIFICANT_VALUE_REACH"
+    | "STRONG_VALUE"
+    | "UNLIKELY_TO_RETURN"
     | "USER_ON_CLOCK";
   position: string | null;
   slots: SlotInstance[];
@@ -217,6 +231,42 @@ export type DraftIntelligence = {
   } | null;
 };
 
+export type RecommendationScoreBreakdown = {
+  value_proximity_score: string;
+  roster_fit_score: string;
+  scarcity_score: string;
+  availability_score: string;
+  value_drop_score: string;
+  flexibility_score: string;
+  total_score: string;
+};
+
+export type DraftRecommendation = {
+  recommendation_rank: number;
+  recommendation_context: "CLOSE_VALUE" | "FALLBACK_VALUE";
+  player_id: number;
+  player_name: string;
+  team: string | null;
+  primary_position: string | null;
+  eligible_positions: string[];
+  overall_rank: number | null;
+  overall_vor: string;
+  projected_fantasy_points: string;
+  projected_roster_assignment: {
+    assignment_type: "active" | "bench" | "unassigned";
+    assigned_slot: string | null;
+    slot_index: number | null;
+    eligible_roster_slots: SlotInstance[];
+  };
+  availability_outlook: "UNLIKELY_TO_RETURN" | "AT_RISK" | "COULD_RETURN" | null;
+  scarcity_position: string | null;
+  scarcity_severity: "HIGH" | "MEDIUM" | "LOW" | null;
+  explanation: string;
+  reasons: AssistantReason[];
+  warnings: AssistantReason[];
+  score_breakdown: RecommendationScoreBreakdown | null;
+};
+
 export type DraftAssistant = {
   draft_id: number;
   status: "in_progress";
@@ -243,6 +293,7 @@ export type DraftAssistant = {
   }[];
   roster_fit_options: AssistantPlayer[];
   intelligence: DraftIntelligence;
+  recommendations: DraftRecommendation[];
 };
 
 export type TeamSetup = {

@@ -14,10 +14,11 @@ committed implementation promises.
 - Milestone 5 - Replacement-Level Valuation
 - Milestone 6 - Draft Assistant MVP
 - Milestone 7 - Draft Intelligence
+- Milestone 8 - Draft Recommendations
 
 ## Next
 
-- Milestone 8 - Recommendation Logic
+- Milestone 9 - Trade Analysis
 
 ## Later
 

@@ -4,6 +4,7 @@ import type {
   DraftAssistant,
   SlotInstance,
 } from "./types";
+import { DraftRecommendationsSection } from "./DraftRecommendationsSection";
 
 export function DraftAssistantPanel({
   assistant,
@@ -49,6 +50,11 @@ export function DraftAssistantPanel({
       </div>
 
       <DraftIntelligenceSummary assistant={assistant} />
+      <DraftRecommendationsSection
+        recommendations={assistant.recommendations}
+        isSaving={isSaving}
+        onDraftPlayer={onDraftPlayer}
+      />
 
       <div className="assistant-roster">
         <div>
