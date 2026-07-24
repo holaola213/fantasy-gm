@@ -169,6 +169,25 @@ class DraftService:
         except SQLAlchemyError as exc:
             raise DraftPersistenceError from exc
 
+    async def reset_draft(self) -> DraftSessionRead:
+        try:
+            async with self.session.begin():
+                draft = await self.repository.get_latest_draft_for_update()
+                if draft is None:
+                    raise DraftNotFoundError
+                await self.repository.delete_draft_picks(draft.id)
+                draft.status = "setup"
+                draft.started_at = None
+                draft.completed_at = None
+                draft = await self.repository.get_draft(draft.id)
+                if draft is None:
+                    raise RuntimeError("draft reset failed")
+                return await self._draft_read(draft)
+        except DraftNotFoundError:
+            raise
+        except SQLAlchemyError as exc:
+            raise DraftPersistenceError from exc
+
     async def get_board(self) -> DraftBoardResponse:
         draft = await self.repository.get_latest_draft()
         if draft is None:
@@ -249,7 +268,7 @@ class DraftService:
     async def undo_latest_pick(self) -> DraftPickRead:
         try:
             async with self.session.begin():
-                draft = await self.repository.get_latest_draft()
+                draft = await self.repository.get_latest_draft_for_update()
                 if draft is None:
                     raise DraftNotFoundError
                 latest = await self.repository.get_latest_pick(draft.id)

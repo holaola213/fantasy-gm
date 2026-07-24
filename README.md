@@ -398,6 +398,19 @@ Undo the latest pick:
 Invoke-RestMethod "http://localhost:8000/draft/picks/latest" -Method Delete
 ```
 
+Reset the current draft:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/draft/reset" -Method Post
+```
+
+Resetting a draft removes every recorded pick and returns the existing draft
+session to setup. It preserves the draft ID, fantasy teams, team names, draft
+positions, user-team marker, team count, round count, league configuration, and
+snapshotted projection set. The frontend requires confirmation before sending
+the reset request. The Draft Assistant is unavailable after reset until the draft
+is started again.
+
 Get player eligibility:
 
 ```powershell
@@ -412,7 +425,8 @@ lists, but cannot be drafted until eligibility exists.
 Setup drafts can be edited before starting. Starting a draft freezes the fantasy
 teams, draft positions, user-team designation, rounds, team count, and projection
 set. Setup and in-progress drafts may be deleted. Completed drafts are preserved
-and cannot be deleted through the Milestone 4 API.
+and cannot be deleted through the Milestone 4 API. Setup, in-progress, and
+completed drafts may be reset.
 
 League scoring and roster settings are locked while a setup or in-progress draft
 exists, because draft valuation depends on those settings. Delete the active

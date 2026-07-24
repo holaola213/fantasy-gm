@@ -407,6 +407,77 @@ async def test_picks_are_sequential_and_exclude_drafted_players(
 
 
 @pytest.mark.asyncio
+async def test_reset_in_progress_draft_preserves_setup_and_clears_picks(
+    client: AsyncClient,
+) -> None:
+    await seed_core_fixtures(client)
+    create_response = await client.post("/draft", json=draft_payload(user_position=4))
+    await client.post("/draft/start")
+    for player_id in [1, 2, 3, 4, 5]:
+        assert (await client.post("/draft/picks", json={"player_id": player_id})).status_code == 200
+
+    before_board = (await client.get("/draft/board")).json()
+    before_teams = before_board["teams"]
+    reset_response = await client.post("/draft/reset")
+
+    assert reset_response.status_code == 200
+    body = reset_response.json()
+    assert body["id"] == create_response.json()["id"]
+    assert body["status"] == "setup"
+    assert body["projection_set_id"] == create_response.json()["projection_set_id"]
+    assert body["team_count"] == create_response.json()["team_count"]
+    assert body["rounds"] == create_response.json()["rounds"]
+    assert body["current_pick_number"] == 1
+    assert body["current_round"] == 1
+    assert body["current_pick_in_round"] == 1
+    assert body["started_at"] is None
+    assert body["completed_at"] is None
+
+    after_board = (await client.get("/draft/board")).json()
+    assert after_board["picks"] == []
+    assert [
+        (team["name"], team["draft_position"], team["is_user_team"])
+        for team in after_board["teams"]
+    ] == [
+        (team["name"], team["draft_position"], team["is_user_team"])
+        for team in before_teams
+    ]
+
+    assistant_response = await client.get("/draft/assistant")
+    assert assistant_response.status_code == 409
+    assert assistant_response.json() == {"detail": "active draft required"}
+
+    jokic_available = await client.get("/draft/available-players", params={"search": "jokic"})
+    assert jokic_available.status_code == 200
+    assert jokic_available.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_start_after_reset_reuses_snapshot_and_restarts_at_first_pick(
+    client: AsyncClient,
+) -> None:
+    await seed_core_fixtures(client)
+    create_response = await client.post("/draft", json=draft_payload(user_position=4))
+    projection_set_id = create_response.json()["projection_set_id"]
+    await client.post("/draft/start")
+    assert (await client.post("/draft/picks", json={"player_id": 1})).status_code == 200
+
+    reset_response = await client.post("/draft/reset")
+    assert reset_response.status_code == 200
+    restarted = await client.post("/draft/start")
+    assert restarted.status_code == 200
+    assert restarted.json()["projection_set_id"] == projection_set_id
+    assert restarted.json()["current_pick_number"] == 1
+
+    pick_response = await client.post("/draft/picks", json={"player_id": 1})
+    assert pick_response.status_code == 200
+    assert pick_response.json()["overall_pick"] == 1
+    assert pick_response.json()["round_number"] == 1
+    assert pick_response.json()["pick_in_round"] == 1
+    assert pick_response.json()["fantasy_team_name"] == "Team 1"
+
+
+@pytest.mark.asyncio
 async def test_api_picks_follow_snake_boundaries_and_only_latest_undo(
     client: AsyncClient,
 ) -> None:
@@ -549,6 +620,59 @@ async def test_final_pick_completes_draft_undo_restores_and_completed_delete_rej
 
     after_completion_pick = await client.post("/draft/picks", json={"player_id": 3})
     assert after_completion_pick.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_completed_draft_can_be_reset(client: AsyncClient) -> None:
+    from app.drafts import seed as draft_seed_module
+    from app.players import seed as player_seed_module
+    from app.projections import seed as projection_seed_module
+
+    await run_seed(player_seed_module, seed_players, client.session_factory)
+    await client.put("/league", json=small_league_payload())
+    await run_seed(projection_seed_module, seed_projections, client.session_factory)
+    await run_seed(draft_seed_module, seed_draft_eligibilities, client.session_factory)
+
+    create_response = await client.post(
+        "/draft",
+        json=draft_payload(team_count=2, user_position=1),
+    )
+    await client.post("/draft/start")
+    await client.post("/draft/picks", json={"player_id": 1})
+    await client.post("/draft/picks", json={"player_id": 2})
+    assert (await client.get("/draft")).json()["status"] == "completed"
+
+    reset_response = await client.post("/draft/reset")
+
+    assert reset_response.status_code == 200
+    assert reset_response.json()["id"] == create_response.json()["id"]
+    assert reset_response.json()["status"] == "setup"
+    assert reset_response.json()["current_pick_number"] == 1
+    assert (await client.get("/draft/board")).json()["picks"] == []
+
+
+@pytest.mark.asyncio
+async def test_setup_draft_reset_is_idempotent(client: AsyncClient) -> None:
+    await seed_core_fixtures(client)
+    create_response = await client.post("/draft", json=draft_payload(user_position=4))
+
+    first_reset = await client.post("/draft/reset")
+    second_reset = await client.post("/draft/reset")
+
+    assert first_reset.status_code == 200
+    assert second_reset.status_code == 200
+    assert second_reset.json()["id"] == create_response.json()["id"]
+    assert second_reset.json()["status"] == "setup"
+    assert second_reset.json()["current_pick_number"] == 1
+    assert (await client.get("/draft/board")).json()["picks"] == []
+
+
+@pytest.mark.asyncio
+async def test_reset_missing_draft_returns_not_found(client: AsyncClient) -> None:
+    response = await client.post("/draft/reset")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "draft not found"}
 
 
 @pytest.mark.asyncio

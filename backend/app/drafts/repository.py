@@ -149,6 +149,12 @@ class DraftRepository:
         await self.session.delete(draft)
         await self.session.flush()
 
+    async def delete_draft_picks(self, draft_session_id: int) -> None:
+        await self.session.execute(
+            delete(DraftPick).where(DraftPick.draft_session_id == draft_session_id)
+        )
+        await self.session.flush()
+
     async def get_team_by_position(
         self,
         *,

@@ -129,6 +129,24 @@ async def start_draft(
         ) from exc
 
 
+@router.post("/draft/reset", response_model=DraftSessionRead)
+async def reset_draft(
+    service: Annotated[DraftService, Depends(get_draft_service)],
+) -> DraftSessionRead:
+    try:
+        return await service.reset_draft()
+    except DraftNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="draft not found",
+        ) from exc
+    except DraftPersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="draft could not be reset",
+        ) from exc
+
+
 @router.delete("/draft", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_draft(
     service: Annotated[DraftService, Depends(get_draft_service)],

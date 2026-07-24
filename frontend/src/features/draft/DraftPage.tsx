@@ -525,6 +525,37 @@ export function DraftPage() {
     }
   }
 
+  async function resetDraft() {
+    const confirmed = window.confirm(
+      "Reset the entire draft? This will remove every recorded pick and return the draft to setup. This cannot be undone.",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setIsSaving(true);
+    setErrorMessage(null);
+    setNoticeMessage(null);
+    setAssistant(null);
+    setAvailablePlayers([]);
+    setAvailableTotal(0);
+    try {
+      const response = await fetch("/api/draft/reset", { method: "POST" });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail ?? "Unable to reset draft.");
+      }
+      const data = (await response.json()) as DraftSession;
+      setDraft(data);
+      await loadSetupTeams(data);
+      await loadBoard();
+      setNoticeMessage("Draft reset. All recorded picks were removed.");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to reset draft.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function deleteDraft() {
     setIsSaving(true);
     setErrorMessage(null);
@@ -614,6 +645,9 @@ export function DraftPage() {
             <button disabled={isSaving} onClick={() => void deleteDraft()} type="button">
               Delete Draft
             </button>
+            <button disabled={isSaving} onClick={() => void resetDraft()} type="button">
+              Reset Draft
+            </button>
             <button disabled={isSaving} onClick={() => void startDraft()} type="button">
               Start Draft
             </button>
@@ -670,6 +704,9 @@ export function DraftPage() {
                   type="button"
                 >
                   Undo Latest Pick
+                </button>
+                <button disabled={isSaving} onClick={() => void resetDraft()} type="button">
+                  Reset Draft
                 </button>
               </div>
               {board.teams.map((item) => (
