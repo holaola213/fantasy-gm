@@ -5,6 +5,8 @@ Milestone 0 established the local development foundation: PostgreSQL, FastAPI,
 React/Vite, Alembic, environment examples, and a database-backed health check.
 Milestone 1 adds the Players vertical slice with a deterministic local fixture
 dataset.
+Milestone 2 adds the singleton League Configuration slice for local ESPN points
+league settings.
 
 Existing product and architecture documentation lives under `docs/` and
 `research/`.
@@ -96,6 +98,19 @@ docker compose run --rm backend python -m app.players.seed
 
 The seed is idempotent and does not delete unrelated player rows.
 
+## Seed Local League
+
+The league seed command inserts or updates the singleton local development
+league configuration, scoring rules, and roster slots. Fixture keys and IDs are
+local development data and are not ESPN identifiers.
+
+```powershell
+docker compose run --rm backend python -m app.leagues.seed
+```
+
+The seed is idempotent and does not delete unrelated scoring-rule or roster-slot
+rows.
+
 ## Players API
 
 List players:
@@ -120,3 +135,29 @@ The list response includes matching `total` before pagination:
   "offset": 0
 }
 ```
+
+## League API
+
+Get the singleton league configuration:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/league"
+```
+
+If no league is configured, the API returns HTTP 404:
+
+```json
+{
+  "detail": "league configuration not found"
+}
+```
+
+Save the singleton league configuration:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/league" -Method Put -ContentType "application/json" -Body $json
+```
+
+`PUT /league` replaces the singleton league, scoring rules, and roster slots in
+one database transaction. The frontend exposes this through the League Settings
+view at `http://localhost:5173`.

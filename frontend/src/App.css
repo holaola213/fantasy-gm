@@ -16,7 +16,7 @@ body {
   padding: 32px;
 }
 
-.players-page {
+.app-panel {
   background: #ffffff;
   border: 1px solid #d7dde5;
   border-radius: 8px;
@@ -33,6 +33,33 @@ body {
   gap: 20px;
   justify-content: space-between;
   margin-bottom: 28px;
+}
+
+.app-nav {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  background: #ffffff;
+  border: 1px solid #aeb9c5;
+  border-radius: 6px;
+  color: #17202a;
+  cursor: pointer;
+  font: inherit;
+  min-height: 38px;
+  padding: 0 12px;
+}
+
+button:hover:not(:disabled),
+button.active {
+  background: #e8f0eb;
+  border-color: #6f8a76;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .eyebrow {
@@ -119,6 +146,47 @@ select {
   color: #a63636;
 }
 
+.state-message.notice {
+  color: #6f5515;
+}
+
+.state-message.success {
+  color: #16865f;
+}
+
+.validation-list {
+  background: #fff4f4;
+  border: 1px solid #e7b8b8;
+  border-radius: 6px;
+  color: #a63636;
+  margin: 0 0 20px;
+  padding: 12px 16px 12px 32px;
+}
+
+.form-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  margin-bottom: 28px;
+}
+
+.editor-section {
+  margin-top: 28px;
+  overflow-x: auto;
+}
+
+.section-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;
@@ -137,12 +205,23 @@ th {
   text-transform: uppercase;
 }
 
+td input {
+  min-width: 100px;
+  width: 100%;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 28px;
+}
+
 @media (max-width: 720px) {
   .app-shell {
     padding: 16px;
   }
 
-  .players-page {
+  .app-panel {
     padding: 20px;
   }
 
@@ -153,5 +232,13 @@ th {
 
   .filters {
     grid-template-columns: 1fr;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .app-nav {
+    flex-wrap: wrap;
   }
 }
