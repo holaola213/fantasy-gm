@@ -10,9 +10,9 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.players.model import Player
 from app.projections.model import PlayerProjection, ProjectionSet, ProjectionSource
+from app.projections.providers import ProjectionProviderService
 from app.projections.schemas import normalize_source_key
 from app.shared.database.session import AsyncSessionLocal
-from app.shared.fixtures.development import DEVELOPMENT_PLAYER_FIXTURES
 
 
 @dataclass(frozen=True)
@@ -38,23 +38,28 @@ AS_OF_DATE = date(2026, 7, 24)
 
 # Local development fixture values only. Future real imports should create new
 # immutable projection sets instead of updating historical projection sets.
+PROVIDER_PLAYERS = ProjectionProviderService().load_players()
 PROJECTION_FIXTURES = [
     ProjectionFixture(
-        fixture.id,
-        fixture.games,
-        fixture.minutes_per_game,
-        fixture.fgm,
-        fixture.fga,
-        fixture.ftm,
-        fixture.fta,
-        fixture.rebounds,
-        fixture.assists,
-        fixture.steals,
-        fixture.blocks,
-        fixture.turnovers,
+        int(player.source_player_id),
+        player.games,
+        player.minutes_per_game,
+        player.fgm,
+        player.fga,
+        player.ftm,
+        player.fta,
+        player.rebounds,
+        player.assists,
+        player.steals,
+        player.blocks,
+        player.turnovers,
     )
-    for fixture in DEVELOPMENT_PLAYER_FIXTURES
+    for player in PROVIDER_PLAYERS
 ]
+PROVIDER_PLAYERS_BY_ID = {
+    int(player.source_player_id): player
+    for player in PROVIDER_PLAYERS
+}
 
 
 async def seed_projections() -> int:
@@ -115,7 +120,8 @@ async def seed_projections() -> int:
             raise RuntimeError("projection set seed failed")
 
         fixture_names_by_id = {
-            fixture.id: fixture.full_name for fixture in DEVELOPMENT_PLAYER_FIXTURES
+            player_id: player.full_name
+            for player_id, player in PROVIDER_PLAYERS_BY_ID.items()
         }
         existing_players = list(
             await session.scalars(

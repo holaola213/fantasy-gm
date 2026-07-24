@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from app.players.model import Player
-from app.shared.fixtures.development import DEVELOPMENT_PLAYER_FIXTURES
+from app.projections.providers import ProjectionProviderService
 from app.shared.database.session import AsyncSessionLocal
 
 
@@ -20,15 +20,16 @@ class PlayerFixture:
 
 
 # Local development fixture IDs only. They are not NBA or ESPN identifiers.
+PROVIDER_PLAYERS = ProjectionProviderService().load_players()
 PLAYER_FIXTURES = [
     PlayerFixture(
-        fixture.id,
-        fixture.full_name,
-        fixture.team,
-        fixture.primary_position,
-        fixture.is_active,
+        int(player.source_player_id),
+        player.full_name,
+        player.team or "",
+        player.primary_position or "",
+        player.is_active,
     )
-    for fixture in DEVELOPMENT_PLAYER_FIXTURES
+    for player in PROVIDER_PLAYERS
 ]
 
 

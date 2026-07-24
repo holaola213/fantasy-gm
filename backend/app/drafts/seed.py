@@ -8,8 +8,8 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.drafts.schemas import EligibilitySeedRow
 from app.players.model import Player, PlayerEligibility
+from app.projections.providers import ProjectionProviderService
 from app.shared.database.session import AsyncSessionLocal
-from app.shared.fixtures.development import DEVELOPMENT_PLAYER_FIXTURES
 
 
 @dataclass(frozen=True)
@@ -20,14 +20,15 @@ class EligibilityFixture:
 
 # Local development eligibility fixture values only. They are not ESPN or NBA
 # identifiers and should be replaced by real source imports in a later milestone.
+PROVIDER_PLAYERS = ProjectionProviderService().load_players()
 ELIGIBILITY_FIXTURES = [
-    EligibilityFixture(fixture.full_name, fixture.eligible_positions)
-    for fixture in DEVELOPMENT_PLAYER_FIXTURES
+    EligibilityFixture(player.full_name, player.positions)
+    for player in PROVIDER_PLAYERS
 ]
 
 
 async def seed_draft_eligibilities() -> int:
-    expected_names = {fixture.full_name for fixture in DEVELOPMENT_PLAYER_FIXTURES}
+    expected_names = {player.full_name for player in PROVIDER_PLAYERS}
     fixture_names = {fixture.full_name for fixture in ELIGIBILITY_FIXTURES}
     missing_fixture_names = sorted(expected_names - fixture_names)
     if missing_fixture_names:
