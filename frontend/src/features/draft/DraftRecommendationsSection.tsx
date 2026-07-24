@@ -1,14 +1,23 @@
+import { Fragment } from "react";
+
 import type { AssistantReason, DraftRecommendation, SlotInstance } from "./types";
 
 export function DraftRecommendationsSection({
+  draftingPlayerId,
   recommendations,
   isSaving,
   onDraftPlayer,
 }: {
+  draftingPlayerId: number | null;
   recommendations: DraftRecommendation[];
   isSaving: boolean;
   onDraftPlayer: (playerId: number) => void;
 }) {
+  const primaryRecommendation = recommendations.find(
+    (item) => item.recommendation_context === "CLOSE_VALUE",
+  );
+  let fallbackHeaderRendered = false;
+
   return (
     <section className="assistant-section recommendations-section">
       <h3>Recommended Picks</h3>
@@ -18,6 +27,16 @@ export function DraftRecommendationsSection({
         </p>
       ) : (
         <table>
+          <colgroup>
+            <col className="recommendation-rank-column" />
+            <col className="recommendation-player-column" />
+            <col className="recommendation-fit-column" />
+            <col className="recommendation-value-column" />
+            <col className="recommendation-why-column" />
+            <col className="recommendation-signals-column" />
+            <col className="recommendation-watch-column" />
+            <col className="recommendation-pick-column" />
+          </colgroup>
           <thead>
             <tr>
               <th>Rank</th>
@@ -31,10 +50,46 @@ export function DraftRecommendationsSection({
             </tr>
           </thead>
           <tbody>
-            {recommendations.map((item) => (
-              <tr key={`recommendation-${item.player_id}`}>
+            {recommendations.map((item) => {
+              const isPrimary =
+                primaryRecommendation?.player_id === item.player_id;
+              const showFallbackHeader =
+                item.recommendation_context === "FALLBACK_VALUE" &&
+                !fallbackHeaderRendered;
+              const visibleReasons = visiblePositiveReasons(item.reasons);
+              if (showFallbackHeader) {
+                fallbackHeaderRendered = true;
+              }
+
+              return (
+                <Fragment key={`recommendation-${item.player_id}`}>
+                  {showFallbackHeader ? (
+                    <tr className="recommendation-group-row">
+                      <th colSpan={8}>Value-Based Alternatives</th>
+                    </tr>
+                  ) : null}
+                  <tr
+                    className={[
+                      isPrimary ? "primary-recommendation-row" : "",
+                      item.recommendation_context === "FALLBACK_VALUE"
+                        ? "fallback-recommendation-row"
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
                 <td>{item.recommendation_rank}</td>
                 <td>
+                  {isPrimary ? (
+                    <span className="recommendation-label">
+                      Top Recommendation
+                    </span>
+                  ) : null}
+                  {item.recommendation_context === "FALLBACK_VALUE" ? (
+                    <span className="recommendation-label secondary-label">
+                      Alternative
+                    </span>
+                  ) : null}
                   <strong>{item.player_name}</strong>
                   <span className="muted-detail">
                     {item.team ?? "Unsigned"} |{" "}
@@ -72,7 +127,13 @@ export function DraftRecommendationsSection({
                 </td>
                 <td>{item.explanation}</td>
                 <td>
-                  <ReasonPills reasons={item.reasons} />
+                  <ReasonPills reasons={visibleReasons} />
+                  {item.reasons.length > visibleReasons.length ? (
+                    <details className="signal-details">
+                      <summary>All signals</summary>
+                      <ReasonPills reasons={item.reasons} />
+                    </details>
+                  ) : null}
                 </td>
                 <td>
                   {item.warnings.length > 0 ? (
@@ -88,11 +149,13 @@ export function DraftRecommendationsSection({
                     onClick={() => onDraftPlayer(item.player_id)}
                     type="button"
                   >
-                    Draft
+                    {draftingPlayerId === item.player_id ? "Drafting..." : "Draft"}
                   </button>
                 </td>
               </tr>
-            ))}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -119,6 +182,33 @@ function ReasonPills({
       ))}
     </div>
   );
+}
+
+function visiblePositiveReasons(reasons: AssistantReason[]) {
+  const priority = [
+    "BEST_AVAILABLE_VALUE",
+    "STRONG_VALUE",
+    "FILLS_RESTRICTIVE_STARTER_SLOT",
+    "FILLS_FLEX_SLOT",
+    "LIMITED_POSITION_DEPTH",
+    "POSITION_VALUE_DROP",
+    "UNLIKELY_TO_RETURN",
+    "AT_RISK_BEFORE_NEXT_PICK",
+    "BEFORE_MEANINGFUL_VALUE_DROP",
+    "MULTI_POSITION_FLEXIBILITY",
+    "IMPROVES_ACTIVE_LINEUP",
+  ];
+  return [...reasons]
+    .sort(
+      (left, right) =>
+        priorityScore(left.code, priority) - priorityScore(right.code, priority),
+    )
+    .slice(0, 3);
+}
+
+function priorityScore(code: string, priority: string[]) {
+  const index = priority.indexOf(code);
+  return index === -1 ? priority.length : index;
 }
 
 function formatRosterFit(item: DraftRecommendation) {

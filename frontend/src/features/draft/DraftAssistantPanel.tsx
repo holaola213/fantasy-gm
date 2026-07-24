@@ -8,16 +8,20 @@ import { DraftRecommendationsSection } from "./DraftRecommendationsSection";
 
 export function DraftAssistantPanel({
   assistant,
+  draftingPlayerId,
   isLoading,
+  isRefreshing,
   isSaving,
   onDraftPlayer,
 }: {
   assistant: DraftAssistant | null;
+  draftingPlayerId: number | null;
   isLoading: boolean;
+  isRefreshing: boolean;
   isSaving: boolean;
   onDraftPlayer: (playerId: number) => void;
 }) {
-  if (isLoading) {
+  if (isLoading && !assistant) {
     return <p className="state-message">Loading draft assistant...</p>;
   }
   if (!assistant) {
@@ -27,6 +31,11 @@ export function DraftAssistantPanel({
     <section className="assistant-panel" aria-labelledby="draft-assistant-heading">
       <div className="section-header">
         <h2 id="draft-assistant-heading">Draft Assistant</h2>
+        {isRefreshing ? (
+          <span className="refresh-indicator" role="status">
+            Updating recommendations...
+          </span>
+        ) : null}
       </div>
       <div className="summary-grid">
         <div>
@@ -51,6 +60,7 @@ export function DraftAssistantPanel({
 
       <DraftIntelligenceSummary assistant={assistant} />
       <DraftRecommendationsSection
+        draftingPlayerId={draftingPlayerId}
         recommendations={assistant.recommendations}
         isSaving={isSaving}
         onDraftPlayer={onDraftPlayer}
@@ -111,12 +121,14 @@ export function DraftAssistantPanel({
 
       <AssistantOptionSection
         title="Best Available"
+        draftingPlayerId={draftingPlayerId}
         players={assistant.best_available}
         isSaving={isSaving}
         onDraftPlayer={onDraftPlayer}
       />
       <AssistantOptionSection
         title="Roster Fits"
+        draftingPlayerId={draftingPlayerId}
         players={assistant.roster_fit_options}
         isSaving={isSaving}
         onDraftPlayer={onDraftPlayer}
@@ -126,6 +138,7 @@ export function DraftAssistantPanel({
           <AssistantOptionSection
             key={section.position}
             title={`${section.position} Options`}
+            draftingPlayerId={draftingPlayerId}
             players={section.items}
             isSaving={isSaving}
             onDraftPlayer={onDraftPlayer}
@@ -240,11 +253,13 @@ function DraftIntelligenceSummary({ assistant }: { assistant: DraftAssistant }) 
 
 function AssistantOptionSection({
   title,
+  draftingPlayerId,
   players,
   isSaving,
   onDraftPlayer,
 }: {
   title: string;
+  draftingPlayerId: number | null;
   players: AssistantPlayer[];
   isSaving: boolean;
   onDraftPlayer: (playerId: number) => void;
@@ -293,7 +308,7 @@ function AssistantOptionSection({
                     onClick={() => onDraftPlayer(player.player_id)}
                     type="button"
                   >
-                    Draft
+                    {draftingPlayerId === player.player_id ? "Drafting..." : "Draft"}
                   </button>
                 </td>
               </tr>

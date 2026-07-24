@@ -33,13 +33,25 @@ export function DraftPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingAvailable, setIsLoadingAvailable] = useState(false);
   const [isLoadingAssistant, setIsLoadingAssistant] = useState(false);
+  const [isRefreshingAssistant, setIsRefreshingAssistant] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [draftingPlayerId, setDraftingPlayerId] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
 
   useEffect(() => {
     void loadInitialState();
   }, []);
+
+  useEffect(() => {
+    if (!noticeMessage) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setNoticeMessage(null);
+    }, 3500);
+    return () => window.clearTimeout(timeout);
+  }, [noticeMessage]);
 
   useEffect(() => {
     if (!draft || draft.status === "setup") {
@@ -110,34 +122,15 @@ export function DraftPage() {
 
     let isMounted = true;
     const controller = new AbortController();
+    const hasAssistant = assistant !== null;
 
     async function loadAssistant() {
-      setIsLoadingAssistant(true);
-      try {
-        const response = await fetch("/api/draft/assistant", {
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error("Draft assistant request failed");
-        }
-        const data = (await response.json()) as DraftAssistant;
-        if (isMounted) {
-          setAssistant(data);
-          setErrorMessage(null);
-        }
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return;
-        }
-        if (isMounted) {
-          setAssistant(null);
-          setErrorMessage("Unable to load draft assistant.");
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingAssistant(false);
-        }
-      }
+      await refreshAssistant({
+        clearOnFailure: !hasAssistant,
+        isMounted: () => isMounted,
+        mode: hasAssistant ? "refresh" : "initial",
+        signal: controller.signal,
+      });
     }
 
     void loadAssistant();
@@ -223,13 +216,67 @@ export function DraftPage() {
   }
 
   async function loadBoard() {
-    const response = await fetch("/api/draft/board");
-    if (!response.ok) {
+    const data = await loadBoardData();
+    if (!data) {
       return;
     }
-    const data = (await response.json()) as DraftBoard;
     setBoard(data);
     setDraft(data.draft);
+  }
+
+  async function loadBoardData() {
+    const response = await fetch("/api/draft/board");
+    if (!response.ok) {
+      return null;
+    }
+    const data = (await response.json()) as DraftBoard;
+    return data;
+  }
+
+  async function refreshAssistant({
+    clearOnFailure,
+    isMounted,
+    mode,
+    signal,
+  }: {
+    clearOnFailure: boolean;
+    isMounted: () => boolean;
+    mode: "initial" | "refresh";
+    signal?: AbortSignal;
+  }) {
+    if (mode === "refresh") {
+      setIsRefreshingAssistant(true);
+    } else {
+      setIsLoadingAssistant(true);
+    }
+    try {
+      const response = await fetch("/api/draft/assistant", { signal });
+      if (!response.ok) {
+        throw new Error("Draft assistant request failed");
+      }
+      const data = (await response.json()) as DraftAssistant;
+      if (isMounted()) {
+        setAssistant(data);
+        setErrorMessage(null);
+      }
+      return data;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return null;
+      }
+      if (isMounted()) {
+        if (clearOnFailure) {
+          setAssistant(null);
+        }
+        setErrorMessage("Unable to load draft assistant.");
+      }
+      return null;
+    } finally {
+      if (isMounted()) {
+        setIsLoadingAssistant(false);
+        setIsRefreshingAssistant(false);
+      }
+    }
   }
 
   function updateTeamName(index: number, value: string) {
@@ -312,7 +359,12 @@ export function DraftPage() {
   }
 
   async function draftPlayer(playerId: number) {
+    if (isSaving || draftingPlayerId !== null) {
+      return;
+    }
+    const playerName = findDraftablePlayerName(playerId);
     setIsSaving(true);
+    setDraftingPlayerId(playerId);
     setErrorMessage(null);
     try {
       const response = await fetch("/api/draft/picks", {
@@ -324,12 +376,25 @@ export function DraftPage() {
         const body = await response.json().catch(() => null);
         throw new Error(body?.detail ?? "Unable to draft player.");
       }
-      await loadBoard();
-      setNoticeMessage("Pick recorded.");
+      const nextBoard = await loadBoardData();
+      const nextAssistant = await refreshAssistant({
+        clearOnFailure: false,
+        isMounted: () => true,
+        mode: assistant ? "refresh" : "initial",
+      });
+      if (nextBoard) {
+        setBoard(nextBoard);
+        setDraft(nextBoard.draft);
+      }
+      if (!nextAssistant && !nextBoard) {
+        throw new Error("Unable to refresh draft.");
+      }
+      setNoticeMessage(`${playerName} drafted.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to draft player.");
     } finally {
       setIsSaving(false);
+      setDraftingPlayerId(null);
     }
   }
 
@@ -354,7 +419,7 @@ export function DraftPage() {
 
   async function resetDraft() {
     const confirmed = window.confirm(
-      "Reset the entire draft? This will remove every recorded pick and return the draft to setup. This cannot be undone.",
+      "Reset the entire draft?\n\nAll drafted players will be removed and the draft will return to setup.",
     );
     if (!confirmed) {
       return;
@@ -381,6 +446,27 @@ export function DraftPage() {
     } finally {
       setIsSaving(false);
     }
+  }
+
+  function findDraftablePlayerName(playerId: number) {
+    const recommendation = assistant?.recommendations.find(
+      (item) => item.player_id === playerId,
+    );
+    if (recommendation) {
+      return recommendation.player_name;
+    }
+    const assistantPlayer = [
+      ...(assistant?.best_available ?? []),
+      ...(assistant?.roster_fit_options ?? []),
+      ...(assistant?.best_by_position.flatMap((section) => section.items) ?? []),
+    ].find((item) => item.player_id === playerId);
+    if (assistantPlayer) {
+      return assistantPlayer.player_name;
+    }
+    return (
+      availablePlayers.find((player) => player.player_id === playerId)?.player_name ??
+      "Player"
+    );
   }
 
   async function deleteDraft() {
@@ -433,7 +519,11 @@ export function DraftPage() {
   return (
     <div className="draft-page">
       {errorMessage ? <p className="state-message error">{errorMessage}</p> : null}
-      {noticeMessage ? <p className="state-message success">{noticeMessage}</p> : null}
+      {noticeMessage ? (
+        <p className="draft-toast success" role="status">
+          {noticeMessage}
+        </p>
+      ) : null}
 
       {!draft ? (
         <DraftSetupForm
@@ -499,13 +589,16 @@ export function DraftPage() {
                   <DraftAssistantPanel
                     assistant={assistant}
                     isLoading={isLoadingAssistant}
+                    isRefreshing={isRefreshingAssistant}
                     isSaving={isSaving}
+                    draftingPlayerId={draftingPlayerId}
                     onDraftPlayer={(playerId) => void draftPlayer(playerId)}
                   />
                   <AvailablePlayersTable
                     direction={direction}
                     isLoading={isLoadingAvailable}
                     isSaving={isSaving}
+                    draftingPlayerId={draftingPlayerId}
                     players={availablePlayers}
                     position={position}
                     search={search}
@@ -525,16 +618,18 @@ export function DraftPage() {
             <aside className="team-rosters">
               <div className="section-header">
                 <h2>Teams</h2>
-                <button
-                  disabled={isSaving || board.picks.length === 0}
-                  onClick={() => void undoLatestPick()}
-                  type="button"
-                >
-                  Undo Latest Pick
-                </button>
-                <button disabled={isSaving} onClick={() => void resetDraft()} type="button">
-                  Reset Draft
-                </button>
+                <div className="draft-control-actions">
+                  <button
+                    disabled={isSaving || board.picks.length === 0}
+                    onClick={() => void undoLatestPick()}
+                    type="button"
+                  >
+                    Undo Latest Pick
+                  </button>
+                  <button disabled={isSaving} onClick={() => void resetDraft()} type="button">
+                    Reset Draft
+                  </button>
+                </div>
               </div>
               {board.teams.map((item) => (
                 <section className="team-roster" key={item.id}>
@@ -703,6 +798,7 @@ function DraftSummary({
 
 function AvailablePlayersTable({
   direction,
+  draftingPlayerId,
   isLoading,
   isSaving,
   players,
@@ -718,6 +814,7 @@ function AvailablePlayersTable({
   onTeamChange,
 }: {
   direction: SortDirection;
+  draftingPlayerId: number | null;
   isLoading: boolean;
   isSaving: boolean;
   players: AvailablePlayer[];
@@ -808,7 +905,7 @@ function AvailablePlayersTable({
                       onClick={() => onDraftPlayer(player.player_id)}
                       type="button"
                     >
-                      Draft
+                      {draftingPlayerId === player.player_id ? "Drafting..." : "Draft"}
                     </button>
                   </td>
                 </tr>
