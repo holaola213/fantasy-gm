@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import date
 from decimal import Decimal
+import importlib.util
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -84,16 +86,38 @@ async def test_alembic_upgrade_created_active_projection_set_partial_index() -> 
     engine = create_async_engine(settings.database_url)
     try:
         async with engine.begin() as connection:
-            exists = await connection.scalar(
+            index_row = (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT
+                            ix.indisunique AS is_unique,
+                            array_agg(att.attname ORDER BY ord.ordinality) AS columns,
+                            pg_get_expr(ix.indpred, ix.indrelid) AS predicate
+                        FROM pg_class idx
+                        JOIN pg_index ix ON ix.indexrelid = idx.oid
+                        JOIN pg_class tbl ON tbl.oid = ix.indrelid
+                        JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+                        JOIN unnest(ix.indkey) WITH ORDINALITY AS ord(attnum, ordinality)
+                            ON true
+                        JOIN pg_attribute att
+                            ON att.attrelid = tbl.oid
+                            AND att.attnum = ord.attnum
+                        WHERE ns.nspname = current_schema()
+                        AND tbl.relname = 'projection_sets'
+                        AND idx.relname = 'uq_projection_sets_one_active_per_source_season_type'
+                        GROUP BY ix.indisunique, ix.indpred, ix.indrelid
+                        """
+                    )
+                )
+            ).one_or_none()
+            old_constraint_exists = await connection.scalar(
                 text(
                     """
                     SELECT EXISTS (
                         SELECT 1
-                        FROM pg_indexes
-                        WHERE schemaname = current_schema()
-                        AND tablename = 'projection_sets'
-                        AND indexname = 'uq_projection_sets_one_active_per_source_season_type'
-                        AND indexdef ILIKE '%WHERE (is_active = true)%'
+                        FROM pg_constraint
+                        WHERE conname = 'uq_projection_sets_source_season_type_as_of'
                     )
                     """
                 )
@@ -101,7 +125,83 @@ async def test_alembic_upgrade_created_active_projection_set_partial_index() -> 
     finally:
         await engine.dispose()
 
-    assert exists is True
+    assert index_row is not None
+    assert index_row.is_unique is True
+    assert index_row.columns == ["source_id", "season", "projection_type"]
+    assert index_row.predicate == "(is_active = true)"
+    assert old_constraint_exists is False
+
+
+def test_guarded_downgrade_checks_duplicates_before_schema_mutation(monkeypatch) -> None:
+    migration = load_projection_import_migration()
+    calls: list[str] = []
+
+    class FakeConnection:
+        def scalar(self, statement):
+            calls.append("scalar")
+            assert "HAVING count(*) > 1" in str(statement)
+            return 1
+
+    monkeypatch.setattr(migration.op, "get_bind", lambda: FakeConnection())
+    monkeypatch.setattr(
+        migration.op,
+        "drop_index",
+        lambda *args, **kwargs: calls.append("drop_index"),
+    )
+    monkeypatch.setattr(
+        migration.op,
+        "drop_table",
+        lambda *args, **kwargs: calls.append("drop_table"),
+    )
+    monkeypatch.setattr(
+        migration.op,
+        "create_unique_constraint",
+        lambda *args, **kwargs: calls.append("create_unique_constraint"),
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate projection snapshots"):
+        migration.downgrade()
+
+    assert calls == ["scalar"]
+
+
+def test_normal_downgrade_runs_schema_mutations_after_duplicate_check(monkeypatch) -> None:
+    migration = load_projection_import_migration()
+    calls: list[str] = []
+
+    class FakeConnection:
+        def scalar(self, statement):
+            calls.append("scalar")
+            assert "GROUP BY source_id, season, projection_type, as_of_date" in str(
+                statement
+            )
+            return 0
+
+    monkeypatch.setattr(migration.op, "get_bind", lambda: FakeConnection())
+    monkeypatch.setattr(
+        migration.op,
+        "drop_index",
+        lambda name, **kwargs: calls.append(f"drop_index:{name}"),
+    )
+    monkeypatch.setattr(
+        migration.op,
+        "drop_table",
+        lambda name: calls.append(f"drop_table:{name}"),
+    )
+    monkeypatch.setattr(
+        migration.op,
+        "create_unique_constraint",
+        lambda name, *args, **kwargs: calls.append(f"create_unique_constraint:{name}"),
+    )
+
+    migration.downgrade()
+
+    assert calls == [
+        "scalar",
+        "drop_index:uq_projection_sets_one_active_per_source_season_type",
+        "drop_table:player_source_identities",
+        "create_unique_constraint:uq_projection_sets_source_season_type_as_of",
+    ]
 
 
 @pytest.mark.asyncio
@@ -688,3 +788,21 @@ async def eligibility_positions(
                 )
             )
         )
+
+
+def load_projection_import_migration():
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "20260724_0005_add_projection_import_identity.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "projection_import_identity_migration",
+        migration_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load projection import identity migration")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module

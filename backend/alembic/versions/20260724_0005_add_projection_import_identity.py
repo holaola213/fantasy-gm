@@ -22,13 +22,12 @@ def upgrade() -> None:
         "projection_sets",
         type_="unique",
     )
-    op.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS
-        uq_projection_sets_one_active_per_source_season_type
-        ON projection_sets (source_id, season, projection_type)
-        WHERE is_active = true
-        """
+    op.create_index(
+        "uq_projection_sets_one_active_per_source_season_type",
+        "projection_sets",
+        ["source_id", "season", "projection_type"],
+        unique=True,
+        postgresql_where=sa.text("is_active = true"),
     )
     op.create_table(
         "player_source_identities",
@@ -68,9 +67,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "DROP INDEX IF EXISTS uq_projection_sets_one_active_per_source_season_type"
-    )
     connection = op.get_bind()
     duplicate_count = connection.scalar(
         sa.text(
@@ -92,6 +88,10 @@ def downgrade() -> None:
             "and as-of date. Remove or archive duplicate snapshots manually "
             "before downgrading."
         )
+    op.drop_index(
+        "uq_projection_sets_one_active_per_source_season_type",
+        table_name="projection_sets",
+    )
     op.drop_table("player_source_identities")
     op.create_unique_constraint(
         "uq_projection_sets_source_season_type_as_of",
