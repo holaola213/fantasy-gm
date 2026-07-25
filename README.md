@@ -1,26 +1,49 @@
 # Fantasy GM
 
-Fantasy GM is a single-user fantasy basketball decision-support application.
-Milestone 0 established the local development foundation: PostgreSQL, FastAPI,
-React/Vite, Alembic, environment examples, and a database-backed health check.
-Milestone 1 adds the Players vertical slice with a deterministic local fixture
-dataset.
-Milestone 2 adds the singleton League Configuration slice for local ESPN points
-league settings.
-Milestone 3 adds normalized season player projections and league-scored
-projection display.
-Milestone 4 adds a manual snake draft.
-Milestone 5 adds dynamic league-specific player valuation over replacement.
-Milestone 6 adds a deterministic draft assistant.
-Milestone 7 adds derived draft intelligence for next-pick context,
-availability outlook, positional scarcity, and value-drop awareness.
-Milestone 8 adds deterministic draft recommendations on top of those assistant
-signals.
-Milestone 10 adds projection-provider architecture.
-Milestone 11 adds immutable projection imports and provider-local player identity.
+Current development version: v0.3-dev
 
-Existing product and architecture documentation lives under `docs/` and
-`research/`.
+Fantasy GM is a single-user, desktop-first decision-support application for
+ESPN fantasy basketball drafts. It helps answer who to draft, why, how confident
+the recommendation is, and what could happen if you wait.
+
+Fantasy GM is not a fantasy hosting platform, league management suite, or
+automated drafting bot. It is a local draft decision tool built around one user,
+one ESPN-style points league, deterministic projections, and explainable draft
+recommendations.
+
+Current status: v0.3 is in progress and focuses on production-ready projection
+data infrastructure. Completed capabilities include local PostgreSQL/FastAPI/
+React orchestration, league scoring, players, projection snapshots, valuation,
+manual snake drafts, draft assistant context, and deterministic draft
+recommendations.
+
+Technology stack: React, TypeScript, Vite, FastAPI, SQLAlchemy, Alembic,
+PostgreSQL, and Docker Compose.
+
+The canonical application version is maintained in `backend/pyproject.toml`.
+The roadmap is in `ROADMAP.md`; detailed projection import documentation is in
+`docs/imports/README.md`; existing product and architecture documentation lives
+under `docs/` and `research/`.
+
+## Architecture Overview
+
+```mermaid
+flowchart LR
+    CSV["Projection CSV"] --> Provider["Projection Provider"]
+    Provider --> Normalize["Normalization"]
+    Normalize --> Validate["Validation"]
+    Validate --> Preview["Preview / Dry Run"]
+    Validate --> Plan["Shared Import Plan"]
+    Preview -. "read-only database lookups" .-> DB[(PostgreSQL)]
+    Plan --> Import["Atomic Import"]
+    Import --> DB
+    DB --> Snapshot["Immutable Projection Set"]
+    Snapshot --> Valuation["Valuation + Recommendation Engine"]
+    Valuation --> Assistant["Draft Assistant"]
+```
+
+Preview does not persist data. The recommendation engine reads persisted
+projection snapshots; it does not read directly from CSV files.
 
 ## Prerequisites
 
@@ -150,19 +173,29 @@ create a new projection set every time they succeed. Existing projection sets an
 their `PlayerProjection` rows are not overwritten, so drafts remain pinned to the
 specific `projection_set_id` they captured when created.
 
-The import flow is:
-
-```text
-CSVProjectionProvider -> ProjectionPlayer -> ProjectionImportService -> ProjectionSet -> PlayerProjection
-```
+The import flow is provider parsing, normalization, validation, read-only
+preview, shared import planning, atomic persistence, immutable projection set,
+valuation, recommendations, and the Draft Assistant.
 
 Run a local CSV import with:
 
 ```powershell
 docker compose run --rm backend python -m app.projections.import_csv `
-  --path /data/projections.csv `
-  --source fantasypros `
-  --source-name "FantasyPros" `
+  --path docs/imports/example_projection.csv `
+  --source example `
+  --source-name "Example Provider" `
+  --season 2026 `
+  --as-of-date 2026-10-08 `
+  --preview
+```
+
+Then import with:
+
+```powershell
+docker compose run --rm backend python -m app.projections.import_csv `
+  --path docs/imports/example_projection.csv `
+  --source example `
+  --source-name "Example Provider" `
   --season 2026 `
   --as-of-date 2026-10-08
 ```
@@ -172,15 +205,9 @@ its source, season, and projection type, add `--activate`. Activation deactivate
 the previous active set for that same source, season, and projection type, but it
 does not delete or mutate historical projection rows.
 
-CSV columns:
-
-- Required: `player_id`, `full_name`, `games`, `minutes_per_game`, `fgm`,
-  `fga`, `ftm`, `fta`, `rebounds`, `assists`, `steals`, `blocks`, `turnovers`
-- Optional: `team`, `primary_position`, `positions`, `is_active`
-
-Position values are normalized to `PG`, `SG`, `SF`, `PF`, and `C`. The
-`positions` column accepts comma, `/`, or `|` separators. Projection values are
-parsed as Python `Decimal` values, not binary floating point.
+The full CSV contract, preview behavior, row-count semantics, and validation
+codes are documented in `docs/imports/README.md` and
+`docs/imports/validation_rules.md`.
 
 Duplicate imports are allowed. Importing the same CSV twice creates two
 projection snapshots unless the command fails validation. Milestone 11 does not
