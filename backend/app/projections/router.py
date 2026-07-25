@@ -44,12 +44,7 @@ async def list_projection_sets(
     service: Annotated[ProjectionService, Depends(get_projection_service)],
 ) -> ProjectionSetListResponse:
     projection_sets = await service.list_projection_sets()
-    return ProjectionSetListResponse(
-        items=[
-            ProjectionSetRead.model_validate(projection_set)
-            for projection_set in projection_sets
-        ]
-    )
+    return ProjectionSetListResponse(items=projection_sets)
 
 
 @router.get("/projection-sets/{projection_set_id}", response_model=ProjectionSetRead)
@@ -65,7 +60,7 @@ async def get_projection_set(
             detail="projection set not found",
         ) from exc
 
-    return ProjectionSetRead.model_validate(projection_set)
+    return projection_set
 
 
 @router.get(

@@ -72,7 +72,7 @@ def normalize_projection_players(
         if player is None:
             continue
 
-        normalized_id = player.source_player_id.upper()
+        normalized_id = player.source_player_id
         normalized_name = player.full_name.casefold()
         if normalized_id in seen_ids:
             errors.append(

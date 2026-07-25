@@ -82,13 +82,6 @@ class ProjectionSet(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint(
-            "source_id",
-            "season",
-            "projection_type",
-            "as_of_date",
-            name="uq_projection_sets_source_season_type_as_of",
-        ),
         CheckConstraint(
             "season BETWEEN 2000 AND 2100",
             name="ck_projection_sets_reasonable_season",
@@ -104,6 +97,41 @@ class ProjectionSet(Base):
             "projection_type",
             unique=True,
             postgresql_where=text("is_active = true"),
+        ),
+    )
+
+
+class PlayerSourceIdentity(Base):
+    __tablename__ = "player_source_identities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("projection_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_player_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    source: Mapped[ProjectionSource] = relationship()
+    player: Mapped[Player] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "source_player_id",
+            name="uq_player_source_identities_source_player",
         ),
     )
 

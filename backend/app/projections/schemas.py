@@ -69,6 +69,7 @@ class ProjectionSetRead(BaseModel):
     is_active: bool
     notes: str | None
     created_at: datetime
+    player_count: int = Field(ge=0)
 
     model_config = ConfigDict(from_attributes=True)
 

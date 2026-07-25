@@ -19,10 +19,12 @@ class ProjectionRepository:
         )
         return list(result.all())
 
-    async def list_projection_sets(self) -> list[ProjectionSet]:
-        result = await self.session.scalars(
-            select(ProjectionSet)
+    async def list_projection_sets(self) -> list[tuple[ProjectionSet, int]]:
+        result = await self.session.execute(
+            select(ProjectionSet, func.count(PlayerProjection.id))
+            .outerjoin(PlayerProjection)
             .options(selectinload(ProjectionSet.source))
+            .group_by(ProjectionSet.id)
             .order_by(
                 desc(ProjectionSet.is_active),
                 desc(ProjectionSet.as_of_date),
@@ -30,13 +32,23 @@ class ProjectionRepository:
                 ProjectionSet.id,
             )
         )
-        return list(result.all())
+        return [(projection_set, player_count) for projection_set, player_count in result.all()]
 
     async def get_projection_set(self, projection_set_id: int) -> ProjectionSet | None:
         return await self.session.get(
             ProjectionSet,
             projection_set_id,
             options=[selectinload(ProjectionSet.source)],
+        )
+
+    async def count_projection_players(self, projection_set_id: int) -> int:
+        return (
+            await self.session.scalar(
+                select(func.count()).select_from(PlayerProjection).where(
+                    PlayerProjection.projection_set_id == projection_set_id
+                )
+            )
+            or 0
         )
 
     async def get_singleton_league(self) -> League | None:

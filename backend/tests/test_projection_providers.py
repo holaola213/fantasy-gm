@@ -98,7 +98,7 @@ def test_csv_provider_detects_duplicates_after_normalization(tmp_path) -> None:
     csv_path.write_text(
         CSV_HEADER
         + " abc , Player One,DEN,C,C,70,30,1,2,1,2,3,4,1,1,2,true\n"
-        + " ABC , player one ,OKC,PG,PG,70,30,1,2,1,2,3,4,1,1,2,true\n",
+        + " abc , player one ,OKC,PG,PG,70,30,1,2,1,2,3,4,1,1,2,true\n",
         encoding="utf-8",
     )
 
@@ -108,6 +108,20 @@ def test_csv_provider_detects_duplicates_after_normalization(tmp_path) -> None:
     message = str(exc_info.value)
     assert "duplicate player_id" in message
     assert "duplicate full_name" in message
+
+
+def test_csv_provider_treats_source_player_ids_as_case_sensitive(tmp_path) -> None:
+    csv_path = tmp_path / "case_sensitive_ids.csv"
+    csv_path.write_text(
+        CSV_HEADER
+        + " abc , Player One,DEN,C,C,70,30,1,2,1,2,3,4,1,1,2,true\n"
+        + " ABC , Player Two,OKC,PG,PG,70,30,1,2,1,2,3,4,1,1,2,true\n",
+        encoding="utf-8",
+    )
+
+    players = CSVProjectionProvider(csv_path).load_players()
+
+    assert [player.source_player_id for player in players] == ["abc", "ABC"]
 
 
 def test_csv_provider_reports_malformed_positions(tmp_path) -> None:

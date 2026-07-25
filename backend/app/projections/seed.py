@@ -86,28 +86,6 @@ async def seed_projections() -> int:
         if source_id is None:
             raise RuntimeError("projection source seed failed")
 
-        set_statement = insert(ProjectionSet).values(
-            source_id=source_id,
-            name="Manual 2026 Season Projection Set",
-            season=PROJECTION_SEASON,
-            projection_type=PROJECTION_TYPE,
-            as_of_date=AS_OF_DATE,
-            is_active=True,
-            notes=(
-                "Local development fixture set. Future real imports create new "
-                "immutable projection sets."
-            ),
-        )
-        set_statement = set_statement.on_conflict_do_update(
-            constraint="uq_projection_sets_source_season_type_as_of",
-            set_={
-                "name": set_statement.excluded.name,
-                "is_active": set_statement.excluded.is_active,
-                "notes": set_statement.excluded.notes,
-                "imported_at": func.now(),
-            },
-        )
-        await session.execute(set_statement)
         projection_set_id = await session.scalar(
             select(ProjectionSet.id).where(
                 ProjectionSet.source_id == source_id,
@@ -116,6 +94,35 @@ async def seed_projections() -> int:
                 ProjectionSet.as_of_date == AS_OF_DATE,
             )
         )
+        if projection_set_id is None:
+            projection_set = ProjectionSet(
+                source_id=source_id,
+                name="Manual 2026 Season Projection Set",
+                season=PROJECTION_SEASON,
+                projection_type=PROJECTION_TYPE,
+                as_of_date=AS_OF_DATE,
+                is_active=True,
+                notes=(
+                    "Local development fixture set. Future real imports create new "
+                    "immutable projection sets."
+                ),
+            )
+            session.add(projection_set)
+            await session.flush()
+            projection_set_id = projection_set.id
+        else:
+            projection_set = await session.get(ProjectionSet, projection_set_id)
+            if projection_set is None:
+                raise RuntimeError("projection set seed failed")
+            projection_set.name = "Manual 2026 Season Projection Set"
+            projection_set.is_active = True
+            projection_set.notes = (
+                "Local development fixture set. Future real imports create new "
+                "immutable projection sets."
+            )
+            projection_set.imported_at = func.now()
+            await session.flush()
+
         if projection_set_id is None:
             raise RuntimeError("projection set seed failed")
 

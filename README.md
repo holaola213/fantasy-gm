@@ -16,6 +16,8 @@ Milestone 7 adds derived draft intelligence for next-pick context,
 availability outlook, positional scarcity, and value-drop awareness.
 Milestone 8 adds deterministic draft recommendations on top of those assistant
 signals.
+Milestone 10 adds projection-provider architecture.
+Milestone 11 adds immutable projection imports and provider-local player identity.
 
 Existing product and architecture documentation lives under `docs/` and
 `research/`.
@@ -125,9 +127,9 @@ rows.
 ## Seed Local Projections
 
 The projections seed command inserts or updates one deterministic manual local
-development projection source and one manual season projection set. Fixture
-values are local development data. Future real imports should create new
-immutable projection sets rather than updating historical imported sets.
+development projection source and one manual season projection set. This command
+remains intentionally idempotent for local development and does not create a new
+snapshot on every run. Fixture values are local development data.
 
 Run the player and league seeds before projection scoring:
 
@@ -140,6 +142,66 @@ docker compose run --rm backend python -m app.projections.seed
 The projection seed creates or updates projections for the deterministic
 synthetic fixture population. It is idempotent and does not delete unrelated
 projection sources, projection sets, or projection rows.
+
+## Import Projection CSV
+
+A `ProjectionSet` represents one immutable projection snapshot. Real imports
+create a new projection set every time they succeed. Existing projection sets and
+their `PlayerProjection` rows are not overwritten, so drafts remain pinned to the
+specific `projection_set_id` they captured when created.
+
+The import flow is:
+
+```text
+CSVProjectionProvider -> ProjectionPlayer -> ProjectionImportService -> ProjectionSet -> PlayerProjection
+```
+
+Run a local CSV import with:
+
+```powershell
+docker compose run --rm backend python -m app.projections.import_csv `
+  --path /data/projections.csv `
+  --source fantasypros `
+  --source-name "FantasyPros" `
+  --season 2026 `
+  --as-of-date 2026-10-08
+```
+
+By default, imported sets are inactive. To make a new import the active set for
+its source, season, and projection type, add `--activate`. Activation deactivates
+the previous active set for that same source, season, and projection type, but it
+does not delete or mutate historical projection rows.
+
+CSV columns:
+
+- Required: `player_id`, `full_name`, `games`, `minutes_per_game`, `fgm`,
+  `fga`, `ftm`, `fta`, `rebounds`, `assists`, `steals`, `blocks`, `turnovers`
+- Optional: `team`, `primary_position`, `positions`, `is_active`
+
+Position values are normalized to `PG`, `SG`, `SF`, `PF`, and `C`. The
+`positions` column accepts comma, `/`, or `|` separators. Projection values are
+parsed as Python `Decimal` values, not binary floating point.
+
+Duplicate imports are allowed. Importing the same CSV twice creates two
+projection snapshots unless the command fails validation. Milestone 11 does not
+add file hashes or import deduplication.
+
+Player identity in V1 is provider-local: the importer resolves players by
+`source` plus `player_id`. Provider player IDs are treated as opaque identifiers:
+they are trimmed during CSV normalization and then compared and stored
+case-sensitively. If no provider identity exists yet, the importer uses an exact
+full-name fallback only when exactly one matching player exists. It does not
+perform fuzzy matching or cross-provider canonical matching.
+
+Projection snapshots are immutable, but current player metadata is not. A
+successful import updates the resolved `Player` row's name, team, primary
+position, active flag, and current eligibility positions. The latest successful
+import for a resolved player replaces that player's current eligibility set
+without changing historical `PlayerProjection` rows.
+
+Downgrading from Milestone 11 to the previous migration is intentionally blocked
+if duplicate projection snapshots exist for the same source, season, projection
+type, and as-of date. The downgrade does not delete or merge projection snapshots.
 
 ## Seed Local Draft Eligibility
 
@@ -252,6 +314,9 @@ Supported player-projection filters are `search`, `team`, `position`, `limit`,
 `offset`, `sort`, and `direction`. Public sort keys include
 `minutes_per_game`, `fantasy_points_per_game`, and
 `projected_fantasy_points`.
+
+Projection-set list and detail responses include source metadata, season,
+as-of date, import timestamp, active status, and derived `player_count`.
 
 If the singleton league configuration is missing, projected-player scoring
 returns HTTP 409:

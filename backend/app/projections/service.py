@@ -1,7 +1,7 @@
 from app.leagues.model import League
 from app.projections.model import PlayerProjection, ProjectionSet, ProjectionSource
 from app.projections.repository import ProjectionRepository
-from app.projections.schemas import ProjectionPlayerRead, SortDirection, SortField
+from app.projections.schemas import ProjectionPlayerRead, ProjectionSetRead, SortDirection, SortField
 from app.shared.scoring import FantasyScorer
 
 
@@ -20,14 +20,19 @@ class ProjectionService:
     async def list_sources(self) -> list[ProjectionSource]:
         return await self.repository.list_sources()
 
-    async def list_projection_sets(self) -> list[ProjectionSet]:
-        return await self.repository.list_projection_sets()
+    async def list_projection_sets(self) -> list[ProjectionSetRead]:
+        rows = await self.repository.list_projection_sets()
+        return [
+            self._build_projection_set_read(projection_set, player_count)
+            for projection_set, player_count in rows
+        ]
 
-    async def get_projection_set(self, projection_set_id: int) -> ProjectionSet:
+    async def get_projection_set(self, projection_set_id: int) -> ProjectionSetRead:
         projection_set = await self.repository.get_projection_set(projection_set_id)
         if projection_set is None:
             raise ProjectionSetNotFoundError
-        return projection_set
+        player_count = await self.repository.count_projection_players(projection_set_id)
+        return self._build_projection_set_read(projection_set, player_count)
 
     async def list_projection_players(
         self,
@@ -108,4 +113,17 @@ class ProjectionService:
             turnovers=projection.turnovers,
             fantasy_points_per_game=fantasy_points_per_game,
             projected_fantasy_points=fantasy_points_per_game * projection.games,
+        )
+
+    def _build_projection_set_read(
+        self,
+        projection_set: ProjectionSet,
+        player_count: int,
+    ) -> ProjectionSetRead:
+        return ProjectionSetRead.model_validate(
+            {
+                **projection_set.__dict__,
+                "source": projection_set.source,
+                "player_count": player_count,
+            }
         )

@@ -15,15 +15,18 @@ committed implementation promises.
 - Milestone 6 - Draft Assistant MVP
 - Milestone 7 - Draft Intelligence
 - Milestone 8 - Draft Recommendations
+- Milestone 9 - Draft Assistant UX Polish
+- Milestone 10 - Projection Provider Architecture
+- Milestone 11 - Projection Import and Snapshot System
 
 ## Next
 
-- Milestone 9 - Trade Analysis
+- Real projection CSV import validation against production-like files
 
 ## Later
 
-- Real projection imports
 - Multiple-source aggregation
+- Canonical multi-provider player identity
 - NBA schedule and injury data
 - In-season fantasy rosters
 - Waiver and streaming recommendations
