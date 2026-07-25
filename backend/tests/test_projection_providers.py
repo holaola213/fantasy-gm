@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import subprocess
+import sys
 
 import pytest
 
@@ -65,6 +67,43 @@ def test_csv_provider_loads_normalized_players(tmp_path) -> None:
     ]
 
 
+def test_csv_provider_loads_payload_with_row_count_and_unknown_column_warning(tmp_path) -> None:
+    csv_path = tmp_path / "payload.csv"
+    csv_path.write_text(
+        CSV_HEADER.replace("\n", ",extra_notes\n")
+        + "1,Player One,DEN,C,C,70,30,1,2,1,2,3,4,1,1,2,true,ignored\n"
+        + "\n"
+        + "2,Player Two,OKC,PG,PG,71,31,1,2,1,2,3,4,1,1,2,true,ignored\n",
+        encoding="utf-8",
+    )
+
+    payload = CSVProjectionProvider(csv_path).load_payload()
+
+    assert payload.rows_read == 2
+    assert [player.full_name for player in payload.players] == [
+        "Player One",
+        "Player Two",
+    ]
+    assert [warning.code for warning in payload.warnings] == ["unknown_column"]
+
+
+def test_csv_provider_accepts_utf8_bom_reordered_columns_and_quoted_values(tmp_path) -> None:
+    csv_path = tmp_path / "excel_export.csv"
+    csv_path.write_text(
+        "\ufefffull_name,player_id,turnovers,blocks,steals,assists,rebounds,"
+        "fta,ftm,fga,fgm,minutes_per_game,games,positions,primary_position,team\n"
+        '"Last, First",bom-1,2,1,1,4,8,5,4,12,6,30.5,69.5,"PG,SG",PG,DEN\r\n',
+        encoding="utf-8",
+    )
+
+    players = CSVProjectionProvider(csv_path).load_players()
+
+    assert players[0].source_player_id == "bom-1"
+    assert players[0].full_name == "Last, First"
+    assert players[0].positions == ("PG", "SG")
+    assert players[0].games == Decimal("69.5")
+
+
 def test_csv_provider_reports_missing_required_columns(tmp_path) -> None:
     csv_path = tmp_path / "missing.csv"
     csv_path.write_text("player_id,full_name\n1,Player One\n", encoding="utf-8")
@@ -93,6 +132,24 @@ def test_csv_provider_reports_invalid_numeric_values(tmp_path) -> None:
         CSVProjectionProvider(csv_path).load_players()
 
 
+def test_csv_provider_reports_non_finite_numeric_values_with_diagnostics(tmp_path) -> None:
+    csv_path = tmp_path / "nan.csv"
+    csv_path.write_text(
+        CSV_HEADER
+        + "1,Player One,DEN,C,C,NaN,30,1,2,1,2,3,4,1,1,2,true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProjectionProviderValidationError) as exc_info:
+        CSVProjectionProvider(csv_path).load_players()
+
+    issue = exc_info.value.issues[0]
+    assert issue.code == "non_finite_number"
+    assert issue.row_number == 2
+    assert issue.field == "games"
+    assert issue.value == "NaN"
+
+
 def test_csv_provider_detects_duplicates_after_normalization(tmp_path) -> None:
     csv_path = tmp_path / "duplicates.csv"
     csv_path.write_text(
@@ -106,8 +163,30 @@ def test_csv_provider_detects_duplicates_after_normalization(tmp_path) -> None:
         CSVProjectionProvider(csv_path).load_players()
 
     message = str(exc_info.value)
+    codes = [issue.code for issue in exc_info.value.issues]
     assert "duplicate player_id" in message
     assert "duplicate full_name" in message
+    assert "duplicate_provider_player_id" in codes
+    assert "duplicate_player_name" in codes
+
+
+def test_csv_provider_reports_multiple_structured_issues(tmp_path) -> None:
+    csv_path = tmp_path / "multiple_errors.csv"
+    csv_path.write_text(
+        CSV_HEADER
+        + "1,,DEN,C,C,NaN,30,1,2,1,2,3,4,1,1,2,true\n"
+        + "2,Player Two,DEN,C,ABC,70,bad,1,2,1,2,3,4,1,1,2,true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProjectionProviderValidationError) as exc_info:
+        CSVProjectionProvider(csv_path).load_players()
+
+    codes = [issue.code for issue in exc_info.value.issues]
+    assert "required_field_missing" in codes
+    assert "non_finite_number" in codes
+    assert "unknown_position" in codes
+    assert "invalid_number" in codes
 
 
 def test_csv_provider_treats_source_player_ids_as_case_sensitive(tmp_path) -> None:
@@ -124,6 +203,80 @@ def test_csv_provider_treats_source_player_ids_as_case_sensitive(tmp_path) -> No
     assert [player.source_player_id for player in players] == ["abc", "ABC"]
 
 
+def test_documented_example_projection_csv_passes_preview_parser() -> None:
+    players = CSVProjectionProvider("docs/imports/example_projection.csv").load_players()
+
+    assert len(players) == 3
+    assert players[0].source_player_id == "example-001"
+
+
+def test_cli_validation_failure_has_no_traceback(tmp_path) -> None:
+    csv_path = tmp_path / "invalid_cli.csv"
+    csv_path.write_text(
+        CSV_HEADER
+        + "1,Player One,DEN,C,C,not-a-number,30,1,2,1,2,3,4,1,1,2,true\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.projections.import_csv",
+            "--path",
+            str(csv_path),
+            "--source",
+            "cli-test",
+            "--source-name",
+            "CLI Test",
+            "--season",
+            "2026",
+            "--as-of-date",
+            "2026-10-08",
+            "--preview",
+        ],
+        cwd=".",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "Projection import failed:" in output
+    assert "Traceback" not in output
+
+
+def test_cli_preview_success_uses_zero_exit_code() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.projections.import_csv",
+            "--path",
+            "docs/imports/example_projection.csv",
+            "--source",
+            "cli-preview",
+            "--source-name",
+            "CLI Preview",
+            "--season",
+            "2026",
+            "--as-of-date",
+            "2026-10-08",
+            "--preview",
+        ],
+        cwd=".",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0
+    assert "Ready: True" in output
+    assert "Rows read: 3" in output
+
+
 def test_csv_provider_reports_malformed_positions(tmp_path) -> None:
     csv_path = tmp_path / "positions.csv"
     csv_path.write_text(
@@ -134,6 +287,33 @@ def test_csv_provider_reports_malformed_positions(tmp_path) -> None:
 
     with pytest.raises(ProjectionProviderValidationError, match="unsupported"):
         CSVProjectionProvider(csv_path).load_players()
+
+
+def test_csv_provider_reports_empty_provider_rows_with_stable_code(tmp_path) -> None:
+    csv_path = tmp_path / "blank_rows.csv"
+    csv_path.write_text(CSV_HEADER + "\n\n", encoding="utf-8")
+
+    with pytest.raises(ProjectionProviderValidationError) as exc_info:
+        CSVProjectionProvider(csv_path).load_players()
+
+    assert exc_info.value.issues[0].code == "empty_provider_rows"
+
+
+def test_csv_provider_reports_malformed_rows_with_extra_fields(tmp_path) -> None:
+    csv_path = tmp_path / "extra_fields.csv"
+    csv_path.write_text(
+        CSV_HEADER
+        + "1,Player One,DEN,C,C,70,30,1,2,1,2,3,4,1,1,2,true,overflow\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProjectionProviderValidationError) as exc_info:
+        CSVProjectionProvider(csv_path).load_players()
+
+    issue = exc_info.value.issues[0]
+    assert issue.code == "malformed_row"
+    assert issue.row_number == 2
+    assert issue.value == "overflow"
 
 
 def test_seed_provider_loads_deterministic_development_players() -> None:

@@ -13,7 +13,7 @@ from alembic.config import Config
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.drafts.model import DraftSession
@@ -207,11 +207,262 @@ async def test_successful_normalized_player_import_creates_snapshot(
         )
 
     assert result.player_count == 1
+    assert result.rows_imported == 1
+    assert result.existing_players_matched == 0
+    assert result.new_players_created == 1
+    assert result.source_identities_created == 1
+    assert result.players_with_eligibility_changes == 1
+    assert result.eligibility_positions_added == 1
+    assert result.eligibility_positions_removed == 0
+    assert result.projection_rows_created == 1
     assert result.is_active is False
     assert projection_set is not None
     assert projection_set.is_active is False
     assert projection_count == 1
     assert identity_count == 1
+
+
+@pytest.mark.asyncio
+async def test_valid_preview_returns_structured_counts_without_writes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        preview = await ProjectionImportService(session).preview_players(
+            players=[
+                sample_player(source_player_id="preview-1", full_name="Preview One"),
+                sample_player(
+                    source_player_id="preview-2",
+                    full_name="Preview Two",
+                    positions=("PG", "SG"),
+                ),
+            ],
+            metadata=metadata(source_key="preview", source_name="Preview Source"),
+            rows_read=3,
+        )
+
+    async with session_factory() as session:
+        source_count = await session.scalar(
+            select(text("count(*)")).select_from(ProjectionSource)
+        )
+        player_count = await session.scalar(select(text("count(*)")).select_from(Player))
+        identity_count = await session.scalar(
+            select(text("count(*)")).select_from(PlayerSourceIdentity)
+        )
+        projection_set_count = await session.scalar(
+            select(text("count(*)")).select_from(ProjectionSet)
+        )
+
+    assert preview.source_exists is False
+    assert preview.rows_read == 3
+    assert preview.valid_player_rows == 2
+    assert preview.matched_existing_players == 0
+    assert preview.newly_proposed_players == 2
+    assert preview.identities_to_create == 2
+    assert preview.players_with_eligibility_changes == 2
+    assert preview.eligibility_positions_to_add == 3
+    assert preview.eligibility_positions_to_remove == 0
+    assert preview.projection_rows_to_create == 2
+    assert source_count == 0
+    assert player_count == 0
+    assert identity_count == 0
+    assert projection_set_count == 0
+
+
+@pytest.mark.asyncio
+async def test_preview_does_not_autoflush_pending_session_mutations(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        pending_player = Player(full_name="Pending Autoflush Player")
+        session.add(pending_player)
+
+        preview = await ProjectionImportService(session).preview_players(
+            players=[sample_player(source_player_id="preview-no-flush")],
+            metadata=metadata(source_key="preview-no-flush", source_name="No Flush"),
+        )
+
+        pending_state = inspect(pending_player)
+        assert preview.valid_player_rows == 1
+        assert pending_state.pending is True
+        assert pending_player.id is None
+        assert pending_player in session.new
+
+        async with session_factory() as independent_session:
+            persisted_count = await independent_session.scalar(
+                select(text("count(*)")).select_from(Player).where(
+                    Player.full_name == "Pending Autoflush Player"
+                )
+            )
+        assert persisted_count == 0
+
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_import_after_preview_in_same_session_is_explicitly_rejected(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    players = [sample_player(source_player_id="same-session-preview")]
+
+    async with session_factory() as session:
+        await ProjectionImportService(session).preview_players(
+            players=players,
+            metadata=metadata(
+                source_key="same-session-preview",
+                source_name="Same Session Preview",
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="use a new session after preview"):
+            await ProjectionImportService(session).import_players(
+                players=players,
+                metadata=metadata(
+                    source_key="same-session-preview",
+                    source_name="Same Session Preview",
+                ),
+            )
+
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_preview_and_import_agree_on_key_counts_for_unchanged_database(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await import_players(
+            session,
+            [sample_player(source_player_id="match-1", positions=("PG", "SG"))],
+            metadata=metadata(source_key="preview-agree", source_name="Preview Agree"),
+        )
+
+    players = [
+        sample_player(source_player_id="match-1", positions=("SG",)),
+        sample_player(source_player_id="new-1", full_name="New Preview Player"),
+    ]
+    import_metadata = metadata(
+        source_key="preview-agree",
+        source_name="Preview Agree",
+        as_of_date=date(2026, 10, 9),
+        activate=True,
+    )
+
+    async with session_factory() as session:
+        preview = await ProjectionImportService(session).preview_players(
+            players=players,
+            metadata=import_metadata,
+        )
+
+    async with session_factory() as session:
+        result = await import_players(session, players, metadata=import_metadata)
+
+    assert result.rows_imported == preview.valid_player_rows
+    assert result.existing_players_matched == preview.matched_existing_players
+    assert result.new_players_created == preview.newly_proposed_players
+    assert result.source_identities_created == preview.identities_to_create
+    assert (
+        result.players_with_eligibility_changes
+        == preview.players_with_eligibility_changes
+    )
+    assert result.eligibility_positions_added == preview.eligibility_positions_to_add
+    assert result.eligibility_positions_removed == preview.eligibility_positions_to_remove
+    assert result.projection_rows_created == preview.projection_rows_to_create
+    assert result.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_preview_reports_existing_name_match_identity_and_eligibility_counts(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        player = Player(full_name="Existing Name", team="DEN", primary_position="PG")
+        session.add(player)
+        await session.flush()
+        session.add_all(
+            [
+                PlayerEligibility(player_id=player.id, position_key="PG"),
+                PlayerEligibility(player_id=player.id, position_key="SG"),
+            ]
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        preview = await ProjectionImportService(session).preview_players(
+            players=[sample_player(full_name="Existing Name", positions=("SG", "SF"))],
+            metadata=metadata(source_key="counts", source_name="Counts"),
+        )
+
+    assert preview.matched_existing_players == 1
+    assert preview.newly_proposed_players == 0
+    assert preview.identities_to_create == 1
+    assert preview.players_with_eligibility_changes == 1
+    assert preview.eligibility_positions_to_add == 1
+    assert preview.eligibility_positions_to_remove == 1
+
+
+@pytest.mark.asyncio
+async def test_preview_ambiguous_exact_name_fallback_is_cleanly_reported(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        session.add_all(
+            [Player(full_name="Ambiguous Preview"), Player(full_name="Ambiguous Preview")]
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(ProjectionProviderValidationError) as exc_info:
+            await ProjectionImportService(session).preview_players(
+                players=[
+                    sample_player(
+                        source_player_id="ambiguous-preview",
+                        full_name="Ambiguous Preview",
+                    )
+                ],
+                metadata=metadata(source_key="ambiguous-preview", source_name="Ambiguous"),
+            )
+
+    assert exc_info.value.issues[0].code == "ambiguous_exact_name_match"
+
+
+@pytest.mark.asyncio
+async def test_validation_failure_after_preview_does_not_write(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        with pytest.raises(ProjectionProviderValidationError):
+            await ProjectionImportService(session).preview_players(
+                players=[],
+                metadata=metadata(source_key="empty-preview", source_name="Empty"),
+            )
+
+    async with session_factory() as session:
+        assert await session.scalar(select(text("count(*)")).select_from(ProjectionSet)) == 0
+        assert await session.scalar(select(text("count(*)")).select_from(Player)) == 0
+
+
+@pytest.mark.asyncio
+async def test_import_handles_production_like_v1_row_count(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    players = [
+        sample_player(
+            source_player_id=f"bulk-{index}",
+            full_name=f"Synthetic Projection Player {index}",
+            positions=("PG",) if index % 2 else ("C",),
+        )
+        for index in range(1, 501)
+    ]
+
+    async with session_factory() as session:
+        preview = await ProjectionImportService(session).preview_players(
+            players=players,
+            metadata=metadata(source_key="bulk", source_name="Bulk"),
+            rows_read=500,
+        )
+
+    assert preview.valid_player_rows == 500
+    assert preview.projection_rows_to_create == 500
 
 
 @pytest.mark.asyncio

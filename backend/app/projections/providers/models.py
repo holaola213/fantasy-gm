@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from app.projections.providers.validation import ProjectionValidationIssue
+
 
 @dataclass(frozen=True)
 class ProjectionPlayer:
@@ -23,3 +25,10 @@ class ProjectionPlayer:
     blocks: Decimal
     turnovers: Decimal
     is_active: bool = True
+
+
+@dataclass(frozen=True)
+class ProjectionProviderPayload:
+    players: list[ProjectionPlayer]
+    rows_read: int
+    warnings: tuple[ProjectionValidationIssue, ...] = ()

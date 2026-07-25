@@ -1,0 +1,4 @@
+player_id,full_name,team,primary_position,positions,games,minutes_per_game,fgm,fga,ftm,fta,rebounds,assists,steals,blocks,turnovers,is_active
+example-001,Example Guard,DEN,PG,"PG,SG",68.5,31.25,7.125,15.250,3.500,4.250,4.000,7.500,1.200,0.300,2.600,true
+example-002,Example Wing,BOS,SF,"SG,SF",70,29.5,6.250,13.000,2.750,3.500,5.500,3.250,1.100,0.600,1.900,true
+example-003,Example Center,OKC,C,C,66,27.75,5.800,10.200,2.000,2.750,8.900,2.100,0.700,1.400,1.700,true
