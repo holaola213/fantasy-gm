@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import date
 from decimal import Decimal
@@ -7,6 +8,8 @@ import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
+from alembic import command
+from alembic.config import Config
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -80,8 +83,18 @@ async def client(
         app.dependency_overrides.clear()
 
 
-@pytest.mark.asyncio
-async def test_alembic_upgrade_created_active_projection_set_partial_index() -> None:
+def test_alembic_upgrade_created_active_projection_set_partial_index() -> None:
+    command.upgrade(Config("alembic.ini"), "head")
+    index_row, old_constraint_exists = asyncio.run(fetch_projection_set_index_metadata())
+
+    assert index_row is not None
+    assert index_row.is_unique is True
+    assert index_row.columns == ["source_id", "season", "projection_type"]
+    assert index_row.predicate == "(is_active = true)"
+    assert old_constraint_exists is False
+
+
+async def fetch_projection_set_index_metadata():
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
     try:
@@ -124,12 +137,7 @@ async def test_alembic_upgrade_created_active_projection_set_partial_index() -> 
             )
     finally:
         await engine.dispose()
-
-    assert index_row is not None
-    assert index_row.is_unique is True
-    assert index_row.columns == ["source_id", "season", "projection_type"]
-    assert index_row.predicate == "(is_active = true)"
-    assert old_constraint_exists is False
+    return index_row, old_constraint_exists
 
 
 def test_guarded_downgrade_checks_duplicates_before_schema_mutation(monkeypatch) -> None:
