@@ -145,6 +145,13 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
+        "uq_projection_sets_one_active_per_source_season_type",
+        "projection_sets",
+        ["source_id", "season", "projection_type"],
+        unique=True,
+        postgresql_where=sa.text("is_active = true"),
+    )
+    op.create_index(
         "ix_player_projections_player_id", "player_projections", ["player_id"]
     )
     op.execute(
@@ -175,6 +182,10 @@ def downgrade() -> None:
     )
     op.execute("DROP FUNCTION IF EXISTS update_projection_sources_updated_at")
     op.drop_index("ix_player_projections_player_id", table_name="player_projections")
+    op.drop_index(
+        "uq_projection_sets_one_active_per_source_season_type",
+        table_name="projection_sets",
+    )
     op.drop_table("player_projections")
     op.drop_table("projection_sets")
     op.drop_table("projection_sources")

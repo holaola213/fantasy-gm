@@ -27,6 +27,7 @@ from app.projections.import_service import (
 from app.projections.model import (
     PlayerProjection,
     PlayerSourceIdentity,
+    ProjectionSource,
     ProjectionSet,
 )
 from app.projections.providers import (
@@ -83,61 +84,29 @@ async def client(
         app.dependency_overrides.clear()
 
 
-def test_alembic_upgrade_created_active_projection_set_partial_index() -> None:
-    command.upgrade(Config("alembic.ini"), "head")
-    index_row, old_constraint_exists = asyncio.run(fetch_projection_set_index_metadata())
-
-    assert index_row is not None
-    assert index_row.is_unique is True
-    assert index_row.columns == ["source_id", "season", "projection_type"]
-    assert index_row.predicate == "(is_active = true)"
-    assert old_constraint_exists is False
-
-
-async def fetch_projection_set_index_metadata():
-    settings = get_settings()
-    engine = create_async_engine(settings.database_url)
+def test_alembic_revisions_preserve_active_projection_set_index_ownership() -> None:
+    config = Config("alembic.ini")
     try:
-        async with engine.begin() as connection:
-            index_row = (
-                await connection.execute(
-                    text(
-                        """
-                        SELECT
-                            ix.indisunique AS is_unique,
-                            array_agg(att.attname ORDER BY ord.ordinality) AS columns,
-                            pg_get_expr(ix.indpred, ix.indrelid) AS predicate
-                        FROM pg_class idx
-                        JOIN pg_index ix ON ix.indexrelid = idx.oid
-                        JOIN pg_class tbl ON tbl.oid = ix.indrelid
-                        JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
-                        JOIN unnest(ix.indkey) WITH ORDINALITY AS ord(attnum, ordinality)
-                            ON true
-                        JOIN pg_attribute att
-                            ON att.attrelid = tbl.oid
-                            AND att.attnum = ord.attnum
-                        WHERE ns.nspname = current_schema()
-                        AND tbl.relname = 'projection_sets'
-                        AND idx.relname = 'uq_projection_sets_one_active_per_source_season_type'
-                        GROUP BY ix.indisunique, ix.indpred, ix.indrelid
-                        """
-                    )
-                )
-            ).one_or_none()
-            old_constraint_exists = await connection.scalar(
-                text(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1
-                        FROM pg_constraint
-                        WHERE conname = 'uq_projection_sets_source_season_type_as_of'
-                    )
-                    """
-                )
-            )
+        command.downgrade(config, "base")
+
+        command.upgrade(config, "20260724_0003")
+        assert_active_projection_set_index_exists()
+
+        command.upgrade(config, "20260724_0004")
+        assert_active_projection_set_index_exists()
+
+        command.upgrade(config, "head")
+        assert_active_projection_set_index_exists()
+        assert_old_projection_set_identity_constraint_exists(False)
+
+        command.downgrade(config, "20260724_0004")
+        assert_active_projection_set_index_exists()
+        assert_old_projection_set_identity_constraint_exists(True)
+
+        command.downgrade(config, "20260724_0002")
+        assert_active_projection_set_index_exists(False)
     finally:
-        await engine.dispose()
-    return index_row, old_constraint_exists
+        command.upgrade(config, "head")
 
 
 def test_guarded_downgrade_checks_duplicates_before_schema_mutation(monkeypatch) -> None:
@@ -151,11 +120,6 @@ def test_guarded_downgrade_checks_duplicates_before_schema_mutation(monkeypatch)
             return 1
 
     monkeypatch.setattr(migration.op, "get_bind", lambda: FakeConnection())
-    monkeypatch.setattr(
-        migration.op,
-        "drop_index",
-        lambda *args, **kwargs: calls.append("drop_index"),
-    )
     monkeypatch.setattr(
         migration.op,
         "drop_table",
@@ -188,11 +152,6 @@ def test_normal_downgrade_runs_schema_mutations_after_duplicate_check(monkeypatc
     monkeypatch.setattr(migration.op, "get_bind", lambda: FakeConnection())
     monkeypatch.setattr(
         migration.op,
-        "drop_index",
-        lambda name, **kwargs: calls.append(f"drop_index:{name}"),
-    )
-    monkeypatch.setattr(
-        migration.op,
         "drop_table",
         lambda name: calls.append(f"drop_table:{name}"),
     )
@@ -206,10 +165,29 @@ def test_normal_downgrade_runs_schema_mutations_after_duplicate_check(monkeypatc
 
     assert calls == [
         "scalar",
-        "drop_index:uq_projection_sets_one_active_per_source_season_type",
         "drop_table:player_source_identities",
         "create_unique_constraint:uq_projection_sets_source_season_type_as_of",
     ]
+
+
+def test_guarded_duplicate_snapshot_downgrade_preserves_head_schema_and_data() -> None:
+    config = Config("alembic.ini")
+    command.upgrade(config, "head")
+    try:
+        asyncio.run(create_duplicate_projection_snapshots())
+        before_count = asyncio.run(count_projection_sets_for_source("migrationguard"))
+
+        with pytest.raises(RuntimeError, match="duplicate projection snapshots"):
+            command.downgrade(config, "20260724_0004")
+
+        assert_alembic_revision("20260724_0005")
+        assert_active_projection_set_index_exists()
+        assert_player_source_identities_exists()
+        assert_old_projection_set_identity_constraint_exists(False)
+        assert asyncio.run(count_projection_sets_for_source("migrationguard")) == before_count
+    finally:
+        asyncio.run(delete_projection_source("migrationguard"))
+        command.upgrade(config, "head")
 
 
 @pytest.mark.asyncio
@@ -814,3 +792,197 @@ def load_projection_import_migration():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def assert_active_projection_set_index_exists(expected: bool = True) -> None:
+    index_row = asyncio.run(fetch_active_projection_set_index_metadata())
+    if not expected:
+        assert index_row is None
+        return
+
+    assert index_row is not None
+    assert index_row.is_unique is True
+    assert index_row.columns == ["source_id", "season", "projection_type"]
+    assert index_row.predicate == "(is_active = true)"
+
+
+async def fetch_active_projection_set_index_metadata():
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    try:
+        async with engine.begin() as connection:
+            return (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT
+                            ix.indisunique AS is_unique,
+                            array_agg(att.attname ORDER BY ord.ordinality) AS columns,
+                            pg_get_expr(ix.indpred, ix.indrelid) AS predicate
+                        FROM pg_class idx
+                        JOIN pg_index ix ON ix.indexrelid = idx.oid
+                        JOIN pg_class tbl ON tbl.oid = ix.indrelid
+                        JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+                        JOIN unnest(ix.indkey) WITH ORDINALITY AS ord(attnum, ordinality)
+                            ON true
+                        JOIN pg_attribute att
+                            ON att.attrelid = tbl.oid
+                            AND att.attnum = ord.attnum
+                        WHERE ns.nspname = current_schema()
+                        AND tbl.relname = 'projection_sets'
+                        AND idx.relname = 'uq_projection_sets_one_active_per_source_season_type'
+                        GROUP BY ix.indisunique, ix.indpred, ix.indrelid
+                        """
+                    )
+                )
+            ).one_or_none()
+    finally:
+        await engine.dispose()
+
+
+def assert_old_projection_set_identity_constraint_exists(expected: bool) -> None:
+    assert asyncio.run(old_projection_set_identity_constraint_exists()) is expected
+
+
+async def old_projection_set_identity_constraint_exists() -> bool:
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    try:
+        async with engine.begin() as connection:
+            return bool(
+                await connection.scalar(
+                    text(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM pg_constraint
+                            WHERE conname = 'uq_projection_sets_source_season_type_as_of'
+                        )
+                        """
+                    )
+                )
+            )
+    finally:
+        await engine.dispose()
+
+
+def assert_player_source_identities_exists() -> None:
+    assert asyncio.run(player_source_identities_exists()) is True
+
+
+async def player_source_identities_exists() -> bool:
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    try:
+        async with engine.begin() as connection:
+            return bool(
+                await connection.scalar(
+                    text(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM information_schema.tables
+                            WHERE table_schema = current_schema()
+                            AND table_name = 'player_source_identities'
+                        )
+                        """
+                    )
+                )
+            )
+    finally:
+        await engine.dispose()
+
+
+def assert_alembic_revision(expected: str) -> None:
+    assert asyncio.run(current_alembic_revision()) == expected
+
+
+async def current_alembic_revision() -> str | None:
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    try:
+        async with engine.begin() as connection:
+            return await connection.scalar(text("SELECT version_num FROM alembic_version"))
+    finally:
+        await engine.dispose()
+
+
+async def create_duplicate_projection_snapshots() -> None:
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            source = await session.scalar(
+                select(ProjectionSource).where(ProjectionSource.key == "migrationguard")
+            )
+            if source is not None:
+                await session.delete(source)
+                await session.commit()
+
+        async with factory() as session:
+            source = ProjectionSource(
+                key="migrationguard",
+                name="Migration Guard",
+                description="Temporary migration guard test source",
+            )
+            session.add(source)
+            await session.flush()
+            session.add_all(
+                [
+                    ProjectionSet(
+                        source_id=source.id,
+                        name="Migration Guard Snapshot 1",
+                        season=2026,
+                        projection_type="season",
+                        as_of_date=date(2026, 10, 14),
+                        is_active=False,
+                    ),
+                    ProjectionSet(
+                        source_id=source.id,
+                        name="Migration Guard Snapshot 2",
+                        season=2026,
+                        projection_type="season",
+                        as_of_date=date(2026, 10, 14),
+                        is_active=False,
+                    ),
+                ]
+            )
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+async def delete_projection_source(key: str) -> None:
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            source = await session.scalar(
+                select(ProjectionSource).where(ProjectionSource.key == key)
+            )
+            if source is not None:
+                await session.delete(source)
+                await session.commit()
+    finally:
+        await engine.dispose()
+
+
+async def count_projection_sets_for_source(key: str) -> int:
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            return (
+                await session.scalar(
+                    select(text("count(*)"))
+                    .select_from(ProjectionSet)
+                    .join(ProjectionSource)
+                    .where(ProjectionSource.key == key)
+                )
+                or 0
+            )
+    finally:
+        await engine.dispose()
