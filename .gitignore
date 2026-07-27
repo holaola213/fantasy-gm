@@ -15,5 +15,13 @@ dist/
 build/
 .vite/
 
+# External datasets
+data/raw/*
+!data/raw/.gitkeep
+
+# Generated bootstrap datasets
+data/generated/*
+!data/generated/.gitkeep
+
 .DS_Store
 Thumbs.db

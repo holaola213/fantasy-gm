@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { BootstrapImportPanel } from "./features/bootstrap/BootstrapImportPanel";
 import { DraftPage } from "./features/draft/DraftPage";
 import { LeagueSettingsPage } from "./features/league/LeagueSettingsPage";
 import { PlayersPage } from "./features/players/PlayersPage";
@@ -10,6 +11,11 @@ type Page = "players" | "league" | "projections" | "valuations" | "draft";
 
 export default function App() {
   const [page, setPage] = useState<Page>("players");
+  const [dataRefreshKey, setDataRefreshKey] = useState(0);
+
+  function refreshData() {
+    setDataRefreshKey((current) => current + 1);
+  }
 
   return (
     <main className="app-shell">
@@ -67,11 +73,19 @@ export default function App() {
             </button>
           </nav>
         </header>
-        {page === "players" ? <PlayersPage /> : null}
+        <BootstrapImportPanel
+          refreshKey={dataRefreshKey}
+          onImported={refreshData}
+        />
+        {page === "players" ? <PlayersPage refreshKey={dataRefreshKey} /> : null}
         {page === "league" ? <LeagueSettingsPage /> : null}
-        {page === "projections" ? <ProjectionsPage /> : null}
+        {page === "projections" ? (
+          <ProjectionsPage refreshKey={dataRefreshKey} />
+        ) : null}
         {page === "valuations" ? <ValuationsPage /> : null}
-        {page === "draft" ? <DraftPage /> : null}
+        {page === "draft" ? (
+          <DraftPage onCreateLeague={() => setPage("league")} />
+        ) : null}
       </section>
     </main>
   );

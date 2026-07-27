@@ -158,6 +158,7 @@ class PlayerProjection(Base):
     steals: Mapped[Decimal] = mapped_column(Numeric(6, 3), nullable=False)
     blocks: Mapped[Decimal] = mapped_column(Numeric(6, 3), nullable=False)
     turnovers: Mapped[Decimal] = mapped_column(Numeric(6, 3), nullable=False)
+    points: Mapped[Decimal | None] = mapped_column(Numeric(6, 3), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -190,6 +191,10 @@ class PlayerProjection(Base):
         CheckConstraint("blocks >= 0", name="ck_player_projections_blocks_nonnegative"),
         CheckConstraint(
             "turnovers >= 0", name="ck_player_projections_turnovers_nonnegative"
+        ),
+        CheckConstraint(
+            "points IS NULL OR points >= 0",
+            name="ck_player_projections_points_nonnegative",
         ),
         CheckConstraint("fgm <= fga", name="ck_player_projections_fgm_lte_fga"),
         CheckConstraint("ftm <= fta", name="ck_player_projections_ftm_lte_fta"),

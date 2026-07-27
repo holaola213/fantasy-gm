@@ -25,19 +25,32 @@ type ProjectionSetsResponse = {
   items: ProjectionSet[];
 };
 
-type ProjectionPlayer = {
+type RawProjectionPlayer = {
   player_id: number;
   full_name: string;
   team: string | null;
   primary_position: string | null;
   games: number;
   minutes_per_game: number;
+  fgm: number;
+  fga: number;
+  ftm: number;
+  fta: number;
+  rebounds: number;
+  assists: number;
+  steals: number;
+  blocks: number;
+  turnovers: number;
+  points: number | null;
+};
+
+type ScoredProjectionPlayer = RawProjectionPlayer & {
   fantasy_points_per_game: number;
   projected_fantasy_points: number;
 };
 
-type ProjectionPlayersResponse = {
-  items: ProjectionPlayer[];
+type ProjectionPlayersResponse<T> = {
+  items: T[];
   total: number;
   limit: number;
   offset: number;
@@ -54,11 +67,12 @@ type ProjectionSort =
 
 type SortDirection = "asc" | "desc";
 
-export function ProjectionsPage() {
+export function ProjectionsPage({ refreshKey }: { refreshKey: number }) {
   const [projectionSets, setProjectionSets] = useState<ProjectionSet[]>([]);
   const [selectedSetId, setSelectedSetId] = useState("");
-  const [players, setPlayers] = useState<ProjectionPlayer[]>([]);
+  const [players, setPlayers] = useState<RawProjectionPlayer[]>([]);
   const [total, setTotal] = useState(0);
+  const [hasLeague, setHasLeague] = useState(false);
   const [search, setSearch] = useState("");
   const [team, setTeam] = useState("");
   const [position, setPosition] = useState("");
@@ -72,20 +86,23 @@ export function ProjectionsPage() {
     let isMounted = true;
     const controller = new AbortController();
 
-    async function loadProjectionSets() {
+    async function loadProjectionContext() {
+      setIsLoadingSets(true);
       try {
-        const response = await fetch("/api/projection-sets", {
-          signal: controller.signal,
-        });
+        const [setsResponse, leagueResponse] = await Promise.all([
+          fetch("/api/projection-sets", { signal: controller.signal }),
+          fetch("/api/league", { signal: controller.signal }),
+        ]);
 
-        if (!response.ok) {
+        if (!setsResponse.ok) {
           throw new Error("Projection sets request failed");
         }
 
-        const data = (await response.json()) as ProjectionSetsResponse;
+        const data = (await setsResponse.json()) as ProjectionSetsResponse;
         if (isMounted) {
           setProjectionSets(data.items);
           setSelectedSetId(data.items[0]?.id ? String(data.items[0].id) : "");
+          setHasLeague(leagueResponse.ok);
           setErrorMessage(null);
         }
       } catch (error) {
@@ -102,13 +119,13 @@ export function ProjectionsPage() {
       }
     }
 
-    void loadProjectionSets();
+    void loadProjectionContext();
 
     return () => {
       isMounted = false;
       controller.abort();
     };
-  }, []);
+  }, [refreshKey]);
 
   useEffect(() => {
     if (!selectedSetId) {
@@ -122,10 +139,11 @@ export function ProjectionsPage() {
 
     async function loadProjectionPlayers() {
       setIsLoadingPlayers(true);
-      const params = new URLSearchParams({
-        sort,
-        direction,
-      });
+      const params = new URLSearchParams();
+      if (hasLeague) {
+        params.set("sort", sort);
+        params.set("direction", direction);
+      }
       if (search.trim()) {
         params.set("search", search.trim());
       }
@@ -136,20 +154,26 @@ export function ProjectionsPage() {
         params.set("position", position.trim());
       }
 
-      try {
-        const response = await fetch(
-          `/api/projection-sets/${selectedSetId}/players?${params.toString()}`,
-          { signal: controller.signal },
-        );
+      const path = hasLeague
+        ? `/api/projection-sets/${selectedSetId}/players`
+        : `/api/projection-sets/${selectedSetId}/raw-players`;
 
-        if (response.status === 409) {
-          throw new Error("league-required");
+      try {
+        const response = await fetch(`${path}?${params.toString()}`, {
+          signal: controller.signal,
+        });
+
+        if (response.status === 409 && hasLeague) {
+          setHasLeague(false);
+          return;
         }
         if (!response.ok) {
           throw new Error("Projection players request failed");
         }
 
-        const data = (await response.json()) as ProjectionPlayersResponse;
+        const data = (await response.json()) as ProjectionPlayersResponse<
+          RawProjectionPlayer | ScoredProjectionPlayer
+        >;
         if (isMounted) {
           setPlayers(data.items);
           setTotal(data.total);
@@ -162,11 +186,7 @@ export function ProjectionsPage() {
         if (isMounted) {
           setPlayers([]);
           setTotal(0);
-          setErrorMessage(
-            error instanceof Error && error.message === "league-required"
-              ? "League configuration is required before projections can be scored."
-              : "Unable to load projected players.",
-          );
+          setErrorMessage("Unable to load projected players.");
         }
       } finally {
         if (isMounted) {
@@ -181,7 +201,7 @@ export function ProjectionsPage() {
       isMounted = false;
       controller.abort();
     };
-  }, [selectedSetId, search, team, position, sort, direction]);
+  }, [selectedSetId, hasLeague, search, team, position, sort, direction]);
 
   const selectedSet = projectionSets.find(
     (projectionSet) => String(projectionSet.id) === selectedSetId,
@@ -208,11 +228,21 @@ export function ProjectionsPage() {
     <div className="projections-page">
       {errorMessage ? <p className="state-message error">{errorMessage}</p> : null}
       {projectionSets.length === 0 ? (
-        <p className="state-message">No projection sets are available.</p>
+        <p className="state-message">
+          No projection data has been imported yet. Import bootstrap data to browse
+          preseason projections.
+        </p>
       ) : null}
 
       {projectionSets.length > 0 ? (
         <>
+          {!hasLeague ? (
+            <p className="state-message notice">
+              League configuration is required to calculate fantasy points and
+              valuations. Raw projections are available below.
+            </p>
+          ) : null}
+
           <div className="form-grid">
             <label>
               Projection Set
@@ -279,79 +309,109 @@ export function ProjectionsPage() {
           {!isLoadingPlayers && !errorMessage && players.length > 0 ? (
             <>
               <p className="result-count">{total} matching projected players</p>
-              <table>
-                <thead>
-                  <tr>
-                    <SortableHeader
-                      label="Player"
-                      sortKey="player"
-                      currentSort={sort}
-                      direction={direction}
-                      onSort={changeSort}
-                    />
-                    <SortableHeader
-                      label="Team"
-                      sortKey="team"
-                      currentSort={sort}
-                      direction={direction}
-                      onSort={changeSort}
-                    />
-                    <SortableHeader
-                      label="Position"
-                      sortKey="position"
-                      currentSort={sort}
-                      direction={direction}
-                      onSort={changeSort}
-                    />
-                    <SortableHeader
-                      label="Games"
-                      sortKey="games"
-                      currentSort={sort}
-                      direction={direction}
-                      onSort={changeSort}
-                    />
-                    <SortableHeader
-                      label="Minutes"
-                      sortKey="minutes_per_game"
-                      currentSort={sort}
-                      direction={direction}
-                      onSort={changeSort}
-                    />
-                    <SortableHeader
-                      label="Fantasy PPG"
-                      sortKey="fantasy_points_per_game"
-                      currentSort={sort}
-                      direction={direction}
-                      onSort={changeSort}
-                    />
-                    <SortableHeader
-                      label="Projected Total"
-                      sortKey="projected_fantasy_points"
-                      currentSort={sort}
-                      direction={direction}
-                      onSort={changeSort}
-                    />
-                  </tr>
-                </thead>
-                <tbody>
-                  {players.map((player) => (
-                    <tr key={player.player_id}>
-                      <td>{player.full_name}</td>
-                      <td>{player.team ?? "Unsigned"}</td>
-                      <td>{player.primary_position ?? "Unknown"}</td>
-                      <td>{formatNumber(player.games)}</td>
-                      <td>{formatNumber(player.minutes_per_game)}</td>
-                      <td>{formatNumber(player.fantasy_points_per_game)}</td>
-                      <td>{formatNumber(player.projected_fantasy_points)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {hasLeague ? (
+                <ScoredProjectionTable
+                  direction={direction}
+                  players={players as ScoredProjectionPlayer[]}
+                  sort={sort}
+                  onSort={changeSort}
+                />
+              ) : (
+                <RawProjectionTable players={players} />
+              )}
             </>
           ) : null}
         </>
       ) : null}
     </div>
+  );
+}
+
+function RawProjectionTable({ players }: { players: RawProjectionPlayer[] }) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Team</th>
+          <th>Position</th>
+          <th>Games</th>
+          <th>Minutes</th>
+          <th>FG</th>
+          <th>FGA</th>
+          <th>FT</th>
+          <th>FTA</th>
+          <th>REB</th>
+          <th>AST</th>
+          <th>STL</th>
+          <th>BLK</th>
+          <th>TOV</th>
+          <th>PTS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {players.map((player) => (
+          <tr key={player.player_id}>
+            <td>{player.full_name}</td>
+            <td>{player.team ?? "Unknown"}</td>
+            <td>{player.primary_position ?? "Unknown"}</td>
+            <td>{formatNumber(player.games)}</td>
+            <td>{formatNumber(player.minutes_per_game)}</td>
+            <td>{formatNumber(player.fgm)}</td>
+            <td>{formatNumber(player.fga)}</td>
+            <td>{formatNumber(player.ftm)}</td>
+            <td>{formatNumber(player.fta)}</td>
+            <td>{formatNumber(player.rebounds)}</td>
+            <td>{formatNumber(player.assists)}</td>
+            <td>{formatNumber(player.steals)}</td>
+            <td>{formatNumber(player.blocks)}</td>
+            <td>{formatNumber(player.turnovers)}</td>
+            <td>{formatNumber(player.points)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function ScoredProjectionTable({
+  direction,
+  players,
+  sort,
+  onSort,
+}: {
+  direction: SortDirection;
+  players: ScoredProjectionPlayer[];
+  sort: ProjectionSort;
+  onSort: (sortKey: ProjectionSort) => void;
+}) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <SortableHeader label="Player" sortKey="player" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Team" sortKey="team" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Position" sortKey="position" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Games" sortKey="games" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Minutes" sortKey="minutes_per_game" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Fantasy PPG" sortKey="fantasy_points_per_game" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Projected Total" sortKey="projected_fantasy_points" currentSort={sort} direction={direction} onSort={onSort} />
+        </tr>
+      </thead>
+      <tbody>
+        {players.map((player) => (
+          <tr key={player.player_id}>
+            <td>{player.full_name}</td>
+            <td>{player.team ?? "Unknown"}</td>
+            <td>{player.primary_position ?? "Unknown"}</td>
+            <td>{formatNumber(player.games)}</td>
+            <td>{formatNumber(player.minutes_per_game)}</td>
+            <td>{formatNumber(player.fantasy_points_per_game)}</td>
+            <td>{formatNumber(player.projected_fantasy_points)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -383,7 +443,10 @@ function SortableHeader({
   );
 }
 
-function formatNumber(value: number) {
+function formatNumber(value: number | null) {
+  if (value === null) {
+    return "Unknown";
+  }
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 2,
     minimumFractionDigits: 0,

@@ -29,6 +29,7 @@ OPTIONAL_COLUMNS = {
     "team",
     "primary_position",
     "positions",
+    "points",
     "is_active",
 }
 NUMERIC_FIELDS = (
@@ -177,6 +178,7 @@ def _normalize_projection_player(
         field: _decimal_value(record.get(field), field, row_number, errors)
         for field in NUMERIC_FIELDS
     }
+    points = _optional_decimal_value(record.get("points"), "points", row_number, errors)
 
     if source_player_id is None or full_name is None or any(
         value is None for value in numeric_values.values()
@@ -217,6 +219,16 @@ def _normalize_projection_player(
                     message=f"{field} must be nonnegative",
                 )
             )
+    if points is not None and points < 0:
+        errors.append(
+            ProjectionValidationIssue(
+                code="value_out_of_range",
+                row_number=row_number,
+                field="points",
+                value=str(points),
+                message="points must be nonnegative",
+            )
+        )
     if (
         numeric_values["fgm"] is not None
         and numeric_values["fga"] is not None
@@ -253,6 +265,7 @@ def _normalize_projection_player(
         primary_position=primary_position,
         positions=positions,
         is_active=is_active,
+        points=points,
         **{field: value for field, value in numeric_values.items() if value is not None},
     )
 
@@ -385,6 +398,42 @@ def _decimal_value(
                 message=f"{field} is required",
             )
         )
+        return None
+    try:
+        decimal_value = Decimal(text)
+    except InvalidOperation:
+        errors.append(
+            ProjectionValidationIssue(
+                code="invalid_number",
+                row_number=row_number,
+                field=field,
+                value=text,
+                message=f"{field} must be a valid decimal",
+            )
+        )
+        return None
+    if not decimal_value.is_finite():
+        errors.append(
+            ProjectionValidationIssue(
+                code="non_finite_number",
+                row_number=row_number,
+                field=field,
+                value=text,
+                message=f"{field} must be a finite decimal",
+            )
+        )
+        return None
+    return decimal_value
+
+
+def _optional_decimal_value(
+    value: object,
+    field: str,
+    row_number: int,
+    errors: list[str | ProjectionValidationIssue],
+) -> Decimal | None:
+    text = str(value or "").strip()
+    if not text:
         return None
     try:
         decimal_value = Decimal(text)

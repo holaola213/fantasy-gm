@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://fantasy_gm_user:fantasy_gm_password@db:5432/fantasy_gm"
     )
+    enable_bootstrap_import: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

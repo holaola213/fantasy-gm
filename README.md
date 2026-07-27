@@ -86,6 +86,43 @@ Then open:
 The frontend calls `/api/health`. Vite proxies `/api` to the backend and strips
 the `/api` prefix, so `/api/health` reaches FastAPI as `/health`.
 
+## First-Time Development Workflow
+
+After starting Docker Compose, the app can be populated from the local
+Basketball Reference SPS bootstrap files. The frontend shows an
+`Import Bootstrap Data` action when no projection sets exist and the ignored raw
+CSV and metadata CSV are available.
+
+Expected local raw files:
+
+```text
+data/raw/basketball_reference/basketball_reference_sps_2027.csv
+data/raw/basketball_reference/basketball_reference_player_metadata_2027.csv
+```
+
+The flat `data/raw/basketball_reference_sps_2027.csv` and
+`data/raw/basketball_reference_player_metadata_2027.csv` paths remain supported
+as temporary compatibility fallbacks.
+
+The one-click bootstrap API is local-development only and is controlled by
+`ENABLE_BOOTSTRAP_IMPORT=true`. Docker Compose enables it by default. When the
+flag is disabled, the bootstrap status/import endpoints return HTTP 403.
+
+Intended first-time flow:
+
+1. Start Docker Compose.
+2. Import bootstrap Basketball Reference data.
+3. Browse players.
+4. Browse raw projections.
+5. Configure league settings.
+6. View fantasy points and valuations.
+7. Create a draft.
+
+Players and raw projections are browseable before league setup. League
+configuration is still required for fantasy scoring, valuations, replacement
+levels, and the Draft Assistant. Player position eligibility from the metadata
+CSV is required for valuations and draft recommendations.
+
 ## Expected Health Response
 
 `GET /health` performs a real PostgreSQL query through SQLAlchemy:

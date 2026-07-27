@@ -35,6 +35,7 @@ PROJECTION_FIELDS = (
     "steals",
     "blocks",
     "turnovers",
+    "points",
 )
 
 
@@ -561,6 +562,8 @@ class ProjectionImportService:
                     )
                 )
             for field, value in projection_values(player).items():
+                if value is None:
+                    continue
                 if not isinstance(value, Decimal):
                     errors.append(f"row {index}: {field} must be a Decimal")
                 elif not value.is_finite():

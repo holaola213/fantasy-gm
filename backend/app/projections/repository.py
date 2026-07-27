@@ -4,9 +4,9 @@ from sqlalchemy.orm import selectinload
 
 from app.leagues.model import League, ScoringRule
 from app.leagues.repository import SINGLETON_LEAGUE_ID
-from app.players.model import Player
+from app.players.model import Player, PlayerEligibility
 from app.projections.model import PlayerProjection, ProjectionSet, ProjectionSource
-from app.projections.schemas import SortDirection, SortField
+from app.projections.schemas import RawProjectionSortField, SortDirection, SortField
 
 
 class ProjectionRepository:
@@ -51,6 +51,12 @@ class ProjectionRepository:
             or 0
         )
 
+    async def count_projection_sets(self) -> int:
+        return (
+            await self.session.scalar(select(func.count()).select_from(ProjectionSet))
+            or 0
+        )
+
     async def get_singleton_league(self) -> League | None:
         return await self.session.get(
             League,
@@ -92,6 +98,41 @@ class ProjectionRepository:
         result = await self.session.execute(ordered_query)
         return list(result.all()), total or 0
 
+    async def list_raw_projection_players(
+        self,
+        *,
+        projection_set_id: int,
+        search: str | None,
+        team: str | None,
+        position: str | None,
+        sort: RawProjectionSortField,
+        direction: SortDirection,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[tuple[PlayerProjection, Player]], int]:
+        filtered_query = self._apply_player_filters(
+            select(PlayerProjection, Player).join(Player),
+            projection_set_id=projection_set_id,
+            search=search,
+            team=team,
+            position=position,
+        )
+        total_query = self._apply_player_filters(
+            select(func.count()).select_from(PlayerProjection).join(Player),
+            projection_set_id=projection_set_id,
+            search=search,
+            team=team,
+            position=position,
+        )
+
+        total = await self.session.scalar(total_query)
+        result = await self.session.execute(
+            self._apply_raw_sort(filtered_query, sort=sort, direction=direction)
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(result.all()), total or 0
+
     def _apply_player_filters(
         self,
         query: Select,
@@ -128,6 +169,34 @@ class ProjectionRepository:
         primary_order = desc(column) if direction == "desc" else asc(column)
         return query.order_by(primary_order, Player.full_name, Player.id)
 
+    def _apply_raw_sort(
+        self,
+        query: Select,
+        *,
+        sort: RawProjectionSortField,
+        direction: SortDirection,
+    ) -> Select:
+        sort_columns = {
+            "player": Player.full_name,
+            "team": Player.team,
+            "position": Player.primary_position,
+            "games": PlayerProjection.games,
+            "minutes_per_game": PlayerProjection.minutes_per_game,
+            "fgm": PlayerProjection.fgm,
+            "fga": PlayerProjection.fga,
+            "ftm": PlayerProjection.ftm,
+            "fta": PlayerProjection.fta,
+            "rebounds": PlayerProjection.rebounds,
+            "assists": PlayerProjection.assists,
+            "steals": PlayerProjection.steals,
+            "blocks": PlayerProjection.blocks,
+            "turnovers": PlayerProjection.turnovers,
+            "points": PlayerProjection.points,
+        }
+        column = sort_columns.get(sort, Player.full_name)
+        primary_order = desc(column) if direction == "desc" else asc(column)
+        return query.order_by(primary_order, Player.full_name, Player.id)
+
     async def get_source_by_key(self, key: str) -> ProjectionSource | None:
         result = await self.session.scalars(
             select(ProjectionSource).where(ProjectionSource.key == key)
@@ -151,3 +220,50 @@ class ProjectionRepository:
             )
         )
         return result.one_or_none()
+
+    async def bootstrap_projection_set_summary(
+        self,
+        source_key: str,
+    ) -> tuple[bool, bool]:
+        result = await self.session.execute(
+            select(ProjectionSet.is_active)
+            .join(ProjectionSource)
+            .where(ProjectionSource.key == source_key)
+        )
+        active_flags = [is_active for is_active, in result.all()]
+        return bool(active_flags), any(active_flags)
+
+    async def active_bootstrap_projection_eligibility_summary(
+        self,
+        source_key: str,
+    ) -> tuple[int, int] | None:
+        projection_set_id = await self.session.scalar(
+            select(ProjectionSet.id)
+            .join(ProjectionSource)
+            .where(
+                ProjectionSource.key == source_key,
+                ProjectionSet.is_active.is_(True),
+            )
+            .order_by(desc(ProjectionSet.as_of_date), desc(ProjectionSet.imported_at), ProjectionSet.id)
+            .limit(1)
+        )
+        if projection_set_id is None:
+            return None
+
+        imported_count = (
+            await self.session.scalar(
+                select(func.count(func.distinct(PlayerProjection.player_id))).where(
+                    PlayerProjection.projection_set_id == projection_set_id
+                )
+            )
+            or 0
+        )
+        eligible_count = (
+            await self.session.scalar(
+                select(func.count(func.distinct(PlayerProjection.player_id)))
+                .join(PlayerEligibility, PlayerEligibility.player_id == PlayerProjection.player_id)
+                .where(PlayerProjection.projection_set_id == projection_set_id)
+            )
+            or 0
+        )
+        return imported_count, eligible_count

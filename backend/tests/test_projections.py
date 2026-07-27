@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -13,7 +14,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.main import app
 from app.players.model import Player
 from app.players.seed import PLAYER_FIXTURES, seed_players
+from app.projections import router as projections_router_module
 from app.projections.model import PlayerProjection, ProjectionSet, ProjectionSource
+from app.projections.providers import ProjectionPlayer
 from app.projections.seed import seed_projections
 from app.shared.config.settings import get_settings
 from app.shared.database.base import Base
@@ -131,6 +134,7 @@ async def seed_test_projection_set() -> int:
                     steals=Decimal("1.000"),
                     blocks=Decimal("1.000"),
                     turnovers=Decimal("3.000"),
+                    points=Decimal("26.000"),
                 ),
                 PlayerProjection(
                     projection_set_id=projection_set.id,
@@ -146,6 +150,7 @@ async def seed_test_projection_set() -> int:
                     steals=Decimal("2.000"),
                     blocks=Decimal("1.000"),
                     turnovers=Decimal("2.000"),
+                    points=Decimal("27.000"),
                 ),
                 PlayerProjection(
                     projection_set_id=projection_set.id,
@@ -161,6 +166,7 @@ async def seed_test_projection_set() -> int:
                     steals=Decimal("1.000"),
                     blocks=Decimal("0.000"),
                     turnovers=Decimal("2.000"),
+                    points=Decimal("24.000"),
                 ),
             ]
         )
@@ -205,6 +211,218 @@ async def test_projection_players_require_league_configuration(
 
     assert response.status_code == 409
     assert response.json() == {"detail": "league configuration required"}
+
+
+@pytest.mark.asyncio
+async def test_raw_projection_players_do_not_require_league_configuration(
+    client: AsyncClient,
+) -> None:
+    await seed_test_players()
+    projection_set_id = await seed_test_projection_set()
+
+    response = await client.get(
+        f"/projection-sets/{projection_set_id}/raw-players",
+        params={"limit": 2},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert body["items"][0]["full_name"] == "Anthony Edwards"
+    assert body["items"][0]["games"] == 68.5
+    assert body["items"][0]["points"] == 24
+    assert "fantasy_points_per_game" not in body["items"][0]
+
+
+@pytest.mark.asyncio
+async def test_raw_projection_players_support_filters_and_safe_404(
+    client: AsyncClient,
+) -> None:
+    await seed_test_players()
+    projection_set_id = await seed_test_projection_set()
+
+    response = await client.get(
+        f"/projection-sets/{projection_set_id}/raw-players",
+        params={"search": "jokic", "team": "den", "position": "c"},
+    )
+    missing_response = await client.get("/projection-sets/999999/raw-players")
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["full_name"] == "Nikola Jokic"
+    assert missing_response.status_code == 404
+    assert missing_response.json() == {"detail": "projection set not found"}
+
+
+@pytest.mark.asyncio
+async def test_raw_projection_players_support_sorting_and_validation(
+    client: AsyncClient,
+) -> None:
+    await seed_test_players()
+    projection_set_id = await seed_test_projection_set()
+
+    response = await client.get(
+        f"/projection-sets/{projection_set_id}/raw-players",
+        params={"sort": "points", "direction": "desc", "limit": 1},
+    )
+    invalid_response = await client.get(
+        f"/projection-sets/{projection_set_id}/raw-players",
+        params={"sort": "fantasy_points_per_game"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["full_name"] == "Shai Gilgeous-Alexander"
+    assert response.json()["items"][0]["points"] == 27
+    assert invalid_response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_projection_status_reports_missing_data(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "basketball_reference_sps_2027.csv"
+    metadata_path = tmp_path / "basketball_reference_player_metadata_2027.csv"
+    monkeypatch.setattr(
+        projections_router_module,
+        "default_basketball_reference_sps_path",
+        lambda: csv_path,
+    )
+    monkeypatch.setattr(
+        projections_router_module,
+        "default_basketball_reference_metadata_path",
+        lambda: metadata_path,
+    )
+    monkeypatch.setattr(
+        projections_router_module,
+        "get_settings",
+        lambda: SimpleNamespace(enable_bootstrap_import=True),
+    )
+
+    response = await client.get("/projection-bootstrap/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "projection_sets_count": 0,
+        "csv_available": False,
+        "csv_path": str(csv_path),
+        "metadata_available": False,
+        "metadata_path": str(metadata_path),
+        "bootstrap_projection_set_exists": False,
+        "active_bootstrap_projection_set_exists": False,
+        "imported_player_count": 0,
+        "players_with_eligibility_count": 0,
+        "players_missing_eligibility_count": 0,
+        "draft_ready": False,
+        "import_available": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_projection_endpoints_can_be_disabled(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        projections_router_module,
+        "get_settings",
+        lambda: SimpleNamespace(enable_bootstrap_import=False),
+    )
+
+    status_response = await client.get("/projection-bootstrap/status")
+    import_response = await client.post("/projection-bootstrap/import")
+
+    assert status_response.status_code == 403
+    assert status_response.json() == {"detail": "bootstrap import disabled"}
+    assert import_response.status_code == 403
+    assert import_response.json() == {"detail": "bootstrap import disabled"}
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_projection_import_uses_existing_import_service(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "basketball_reference_sps_2027.csv"
+    csv_path.write_text("fixture", encoding="utf-8")
+    metadata_path = tmp_path / "basketball_reference_player_metadata_2027.csv"
+    metadata_path.write_text("fixture", encoding="utf-8")
+    payload = SimpleNamespace(
+        players=[
+            ProjectionPlayer(
+                source_player_id="bootstrap-1",
+                full_name="Bootstrap Player",
+                team=None,
+                primary_position=None,
+                positions=(),
+                games=Decimal("68.00"),
+                minutes_per_game=Decimal("26.00"),
+                fgm=Decimal("5.000"),
+                fga=Decimal("10.000"),
+                ftm=Decimal("2.000"),
+                fta=Decimal("3.000"),
+                rebounds=Decimal("6.000"),
+                assists=Decimal("4.000"),
+                steals=Decimal("1.000"),
+                blocks=Decimal("1.000"),
+                turnovers=Decimal("2.000"),
+                points=Decimal("12.345"),
+            )
+        ],
+        diagnostics=SimpleNamespace(rows_read=1),
+        parse_result=SimpleNamespace(rejected_issues=()),
+        metadata_result=SimpleNamespace(rejected_issues=()),
+    )
+    monkeypatch.setattr(
+        projections_router_module,
+        "default_basketball_reference_sps_path",
+        lambda: csv_path,
+    )
+    monkeypatch.setattr(
+        projections_router_module,
+        "default_basketball_reference_metadata_path",
+        lambda: metadata_path,
+    )
+    monkeypatch.setattr(
+        projections_router_module,
+        "get_settings",
+        lambda: SimpleNamespace(enable_bootstrap_import=True),
+    )
+    monkeypatch.setattr(
+        projections_router_module,
+        "generate_bootstrap_projection_payload",
+        lambda path, metadata_path: payload,
+    )
+
+    response = await client.post("/projection-bootstrap/import")
+    duplicate_response = await client.post("/projection-bootstrap/import")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_key"] == "basketball-reference-sps-bootstrap"
+    assert body["rows_imported"] == 1
+    assert body["players_created"] == 1
+    assert body["projection_rows_created"] == 1
+    assert duplicate_response.status_code == 409
+    assert duplicate_response.json() == {"detail": "projection data already imported"}
+
+    async for session in app.dependency_overrides[get_session]():
+        assert await session.scalar(text("SELECT count(*) FROM players")) == 1
+        assert await session.scalar(text("SELECT count(*) FROM projection_sources")) == 1
+        assert await session.scalar(text("SELECT count(*) FROM projection_sets")) == 1
+        assert await session.scalar(text("SELECT count(*) FROM player_projections")) == 1
+        assert (
+            await session.scalar(text("SELECT points FROM player_projections"))
+            == Decimal("12.345")
+        )
+
+    raw_response = await client.get(
+        f"/projection-sets/{body['projection_set_id']}/raw-players"
+    )
+    assert raw_response.status_code == 200
+    assert raw_response.json()["items"][0]["points"] == 12.345
 
 
 @pytest.mark.asyncio

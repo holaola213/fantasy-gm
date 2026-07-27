@@ -24,6 +24,7 @@ class ProjectionPlayer:
     steals: Decimal
     blocks: Decimal
     turnovers: Decimal
+    points: Decimal | None = None
     is_active: bool = True
 
 

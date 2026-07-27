@@ -180,7 +180,7 @@ def test_guarded_duplicate_snapshot_downgrade_preserves_head_schema_and_data() -
         with pytest.raises(RuntimeError, match="duplicate projection snapshots"):
             command.downgrade(config, "20260724_0004")
 
-        assert_alembic_revision("20260724_0005")
+        assert_alembic_revision("20260724_0006")
         assert_active_projection_set_index_exists()
         assert_player_source_identities_exists()
         assert_old_projection_set_identity_constraint_exists(False)

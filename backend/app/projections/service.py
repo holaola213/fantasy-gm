@@ -1,7 +1,14 @@
 from app.leagues.model import League
 from app.projections.model import PlayerProjection, ProjectionSet, ProjectionSource
 from app.projections.repository import ProjectionRepository
-from app.projections.schemas import ProjectionPlayerRead, ProjectionSetRead, SortDirection, SortField
+from app.projections.schemas import (
+    ProjectionPlayerRead,
+    ProjectionSetRead,
+    RawProjectionPlayerRead,
+    RawProjectionSortField,
+    SortDirection,
+    SortField,
+)
 from app.shared.scoring import FantasyScorer
 
 
@@ -33,6 +40,40 @@ class ProjectionService:
             raise ProjectionSetNotFoundError
         player_count = await self.repository.count_projection_players(projection_set_id)
         return self._build_projection_set_read(projection_set, player_count)
+
+    async def count_projection_sets(self) -> int:
+        return await self.repository.count_projection_sets()
+
+    async def list_raw_projection_players(
+        self,
+        *,
+        projection_set_id: int,
+        search: str | None,
+        team: str | None,
+        position: str | None,
+        sort: RawProjectionSortField,
+        direction: SortDirection,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[RawProjectionPlayerRead], int]:
+        projection_set = await self.repository.get_projection_set(projection_set_id)
+        if projection_set is None:
+            raise ProjectionSetNotFoundError
+
+        rows, total = await self.repository.list_raw_projection_players(
+            projection_set_id=projection_set_id,
+            search=search,
+            team=team,
+            position=position,
+            sort=sort,
+            direction=direction,
+            limit=limit,
+            offset=offset,
+        )
+        return [
+            self._build_raw_projection_player_read(projection, player)
+            for projection, player in rows
+        ], total
 
     async def list_projection_players(
         self,
@@ -113,6 +154,30 @@ class ProjectionService:
             turnovers=projection.turnovers,
             fantasy_points_per_game=fantasy_points_per_game,
             projected_fantasy_points=fantasy_points_per_game * projection.games,
+        )
+
+    def _build_raw_projection_player_read(
+        self,
+        projection: PlayerProjection,
+        player,
+    ) -> RawProjectionPlayerRead:
+        return RawProjectionPlayerRead(
+            player_id=player.id,
+            full_name=player.full_name,
+            team=player.team,
+            primary_position=player.primary_position,
+            games=projection.games,
+            minutes_per_game=projection.minutes_per_game,
+            fgm=projection.fgm,
+            fga=projection.fga,
+            ftm=projection.ftm,
+            fta=projection.fta,
+            rebounds=projection.rebounds,
+            assists=projection.assists,
+            steals=projection.steals,
+            blocks=projection.blocks,
+            turnovers=projection.turnovers,
+            points=projection.points,
         )
 
     def _build_projection_set_read(

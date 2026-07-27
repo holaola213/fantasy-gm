@@ -20,11 +20,15 @@ services:
       context: ./backend
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://fantasy_gm_user:fantasy_gm_password@db:5432/fantasy_gm}
+      ENABLE_BOOTSTRAP_IMPORT: ${ENABLE_BOOTSTRAP_IMPORT:-true}
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
       - ./docs:/app/docs:ro
+      - ./data/raw:/app/data/raw:ro
+      - ./data/generated:/app/data/generated
+      - ./data/processed:/app/data/processed
     depends_on:
       db:
         condition: service_healthy

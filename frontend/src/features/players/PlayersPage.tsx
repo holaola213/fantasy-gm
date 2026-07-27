@@ -17,7 +17,7 @@ type PlayerListResponse = {
   offset: number;
 };
 
-export function PlayersPage() {
+export function PlayersPage({ refreshKey }: { refreshKey: number }) {
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("checking");
   const [players, setPlayers] = useState<Player[]>([]);
@@ -80,7 +80,7 @@ export function PlayersPage() {
       isMounted = false;
       controller.abort();
     };
-  }, []);
+  }, [refreshKey]);
 
   useEffect(() => {
     if (!hasLoadedInitialPlayers) {
@@ -232,7 +232,11 @@ export function PlayersPage() {
       {errorMessage ? <p className="state-message error">{errorMessage}</p> : null}
       {isLoading ? <p className="state-message">Loading players...</p> : null}
       {!isLoading && !errorMessage && players.length === 0 ? (
-        <p className="state-message">No players match the current filters.</p>
+        <p className="state-message">
+          {initialTotal === 0 && !search.trim() && !team && !position
+            ? "No players exist yet. Import bootstrap data to populate the player list."
+            : "No players match your filters."}
+        </p>
       ) : null}
 
       {!isLoading && !errorMessage && players.length > 0 ? (
@@ -251,7 +255,7 @@ export function PlayersPage() {
               {players.map((player) => (
                 <tr key={player.id}>
                   <td>{player.full_name}</td>
-                  <td>{player.team ?? "Unsigned"}</td>
+                  <td>{player.team ?? "Unknown"}</td>
                   <td>{player.primary_position ?? "Unknown"}</td>
                   <td>{player.is_active ? "Active" : "Inactive"}</td>
                 </tr>

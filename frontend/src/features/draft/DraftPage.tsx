@@ -15,7 +15,11 @@ import type {
   TeamSetup,
 } from "./types";
 
-export function DraftPage() {
+export function DraftPage({
+  onCreateLeague,
+}: {
+  onCreateLeague: () => void;
+}) {
   const [draft, setDraft] = useState<DraftSession | null>(null);
   const [board, setBoard] = useState<DraftBoard | null>(null);
   const [league, setLeague] = useState<LeagueResponse | null>(null);
@@ -25,6 +29,7 @@ export function DraftPage() {
   const [availablePlayers, setAvailablePlayers] = useState<AvailablePlayer[]>([]);
   const [assistant, setAssistant] = useState<DraftAssistant | null>(null);
   const [availableTotal, setAvailableTotal] = useState(0);
+  const [availableErrorMessage, setAvailableErrorMessage] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [team, setTeam] = useState("");
   const [position, setPosition] = useState("");
@@ -82,12 +87,13 @@ export function DraftPage() {
           signal: controller.signal,
         });
         if (!response.ok) {
-          throw new Error("Available players request failed");
+          throw new Error(await errorDetail(response));
         }
         const data = (await response.json()) as AvailablePlayerResponse;
         if (isMounted) {
           setAvailablePlayers(data.items);
           setAvailableTotal(data.total);
+          setAvailableErrorMessage(null);
           setErrorMessage(null);
         }
       } catch (error) {
@@ -96,8 +102,11 @@ export function DraftPage() {
         }
         if (isMounted) {
           setAvailablePlayers([]);
-          setAvailableTotal(0);
-          setErrorMessage("Unable to load available players.");
+          setAvailableErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Player values are temporarily unavailable."
+          );
         }
       } finally {
         if (isMounted) {
@@ -252,7 +261,7 @@ export function DraftPage() {
     try {
       const response = await fetch("/api/draft/assistant", { signal });
       if (!response.ok) {
-        throw new Error("Draft assistant request failed");
+        throw new Error(await errorDetail(response));
       }
       const data = (await response.json()) as DraftAssistant;
       if (isMounted()) {
@@ -268,7 +277,7 @@ export function DraftPage() {
         if (clearOnFailure) {
           setAssistant(null);
         }
-        setErrorMessage("Unable to load draft assistant.");
+        setErrorMessage(assistantErrorMessage(error));
       }
       return null;
     } finally {
@@ -510,9 +519,22 @@ export function DraftPage() {
 
   if (!league && !draft) {
     return (
-      <p className="state-message error">
-        League configuration is required before creating a draft.
-      </p>
+      <section className="onboarding-panel" aria-labelledby="draft-onboarding-heading">
+        <div>
+          <h2 id="draft-onboarding-heading">Draft Assistant</h2>
+          <p>Before creating a draft you'll need a league configuration.</p>
+          <p>League settings determine:</p>
+          <ul>
+            <li>scoring rules</li>
+            <li>roster construction</li>
+            <li>replacement levels</li>
+            <li>draft recommendations</li>
+          </ul>
+        </div>
+        <button onClick={onCreateLeague} type="button">
+          Create League
+        </button>
+      </section>
     );
   }
 
@@ -542,6 +564,7 @@ export function DraftPage() {
         <>
           <DraftSummary
             availableTotal={availableTotal}
+            isAvailableUnavailable={false}
             board={board}
             draft={draft}
             setupTeamName={
@@ -576,6 +599,7 @@ export function DraftPage() {
         <>
           <DraftSummary
             availableTotal={availableTotal}
+            isAvailableUnavailable={Boolean(availableErrorMessage)}
             board={board}
             draft={draft}
           />
@@ -596,6 +620,7 @@ export function DraftPage() {
                   />
                   <AvailablePlayersTable
                     direction={direction}
+                    errorMessage={availableErrorMessage}
                     isLoading={isLoadingAvailable}
                     isSaving={isSaving}
                     draftingPlayerId={draftingPlayerId}
@@ -730,11 +755,13 @@ function DraftSetupForm({
 
 function DraftSummary({
   availableTotal,
+  isAvailableUnavailable,
   board,
   draft,
   setupTeamName,
 }: {
   availableTotal: number;
+  isAvailableUnavailable: boolean;
   board: DraftBoard | null;
   draft: DraftSession;
   setupTeamName?: string;
@@ -789,7 +816,7 @@ function DraftSummary({
         </div>
         <div>
           <span>Players Remaining</span>
-          <strong>{playersRemaining}</strong>
+          <strong>{isAvailableUnavailable ? "Unavailable" : playersRemaining}</strong>
         </div>
       </div>
     </section>
@@ -799,6 +826,7 @@ function DraftSummary({
 function AvailablePlayersTable({
   direction,
   draftingPlayerId,
+  errorMessage,
   isLoading,
   isSaving,
   players,
@@ -815,6 +843,7 @@ function AvailablePlayersTable({
 }: {
   direction: SortDirection;
   draftingPlayerId: number | null;
+  errorMessage: string | null;
   isLoading: boolean;
   isSaving: boolean;
   players: AvailablePlayer[];
@@ -848,7 +877,7 @@ function AvailablePlayersTable({
           <input
             value={team}
             onChange={(event) => onTeamChange(event.target.value)}
-            placeholder="DEN"
+            placeholder="Team abbreviation"
           />
         </label>
         <label>
@@ -864,10 +893,13 @@ function AvailablePlayersTable({
         </label>
       </div>
       {isLoading ? <p className="state-message">Loading available players...</p> : null}
-      {!isLoading && players.length === 0 ? (
+      {!isLoading && errorMessage ? (
+        <p className="state-message error">{errorMessage}</p>
+      ) : null}
+      {!isLoading && !errorMessage && players.length === 0 ? (
         <p className="state-message">No available players match the current filters.</p>
       ) : null}
-      {!isLoading && players.length > 0 ? (
+      {!isLoading && !errorMessage && players.length > 0 ? (
         <>
           <p className="result-count">{total} available players</p>
           <table>
@@ -983,6 +1015,31 @@ function defaultTeams(teamCount: number): TeamSetup[] {
     name: `Team ${index + 1}`,
     draft_position: index + 1,
   }));
+}
+
+async function errorDetail(response: Response) {
+  try {
+    const data = (await response.json()) as { detail?: unknown };
+    if (typeof data.detail === "string") {
+      return data.detail;
+    }
+  } catch {
+    // Fall through to a stable generic message.
+  }
+  return "Request failed.";
+}
+
+function assistantErrorMessage(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "Draft assistant is temporarily unavailable.";
+  }
+  if (error.message === "insufficient eligible player pool") {
+    return (
+      "The active projection set does not contain enough player position "
+      + "eligibility for draft recommendations."
+    );
+  }
+  return error.message;
 }
 
 function formatNumber(value: string | null) {
