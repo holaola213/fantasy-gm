@@ -15,6 +15,10 @@ Platform = Literal["ESPN"]
 ScoringFormat = Literal["points"]
 
 VALID_ROSTER_SLOT_KEYS = {"PG", "SG", "SF", "PF", "C", "G", "F", "UTIL", "BE", "IR"}
+FIXED_SCORING_RULES = {
+    "PTS": Decimal("1"),
+    "TEAM_WINS": Decimal("1"),
+}
 
 
 def normalize_key(value: str) -> str:
@@ -105,6 +109,16 @@ class LeagueUpdate(LeagueBase):
         stat_keys = [rule.stat_key for rule in self.scoring_rules]
         if len(stat_keys) != len(set(stat_keys)):
             raise ValueError("scoring rule stat_key values must be unique")
+
+        rules_by_key = {rule.stat_key: rule for rule in self.scoring_rules}
+        for stat_key, required_points in FIXED_SCORING_RULES.items():
+            rule = rules_by_key.get(stat_key)
+            if rule is None:
+                raise ValueError(f"{stat_key} scoring rule is required")
+            if rule.points != required_points:
+                raise ValueError(
+                    f"{stat_key} scoring rule must have points = {required_points}"
+                )
 
         slot_keys = [slot.slot_key for slot in self.roster_slots]
         if len(slot_keys) != len(set(slot_keys)):

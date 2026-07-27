@@ -24,13 +24,23 @@ from app.valuations.replacement import (
 from app.valuations.repository import ValuationRepository
 from app.valuations.schemas import (
     ActiveSlotDemandRead,
+    DiagnosticMetadataRead,
+    DiagnosticPlayerRead,
+    DiagnosticProjectionRead,
+    DiagnosticReplacementLevelRead,
+    DiagnosticReplacementRead,
+    DiagnosticScoringContributionRead,
+    DiagnosticScoringRead,
+    DiagnosticScoringRuleRead,
+    DiagnosticUnsupportedScoringRuleRead,
     PlayerValuationRead,
+    PlayerValuationDiagnosticsResponse,
     PositionValueRead,
     ReplacementLevelRead,
     ReplacementLevelsResponse,
 )
 
-VALUATION_ALGORITHM_VERSION = "replacement-v1"
+VALUATION_ALGORITHM_VERSION = "replacement-v2"
 VALUATION_CACHE_MAX_ENTRIES = 8
 ValuationCacheKey = tuple[int, str, int, str, str, int, str | None]
 
@@ -56,6 +66,10 @@ class ConflictingProjectionSetError(Exception):
 
 
 class PlayerValuationNotFoundError(Exception):
+    pass
+
+
+class PlayerProjectionNotFoundError(Exception):
     pass
 
 
@@ -172,6 +186,103 @@ class ValuationService:
                 return item
         raise PlayerValuationNotFoundError
 
+    async def player_diagnostics(
+        self,
+        *,
+        player_id: int,
+        projection_set_id: int | None,
+    ) -> PlayerValuationDiagnosticsResponse:
+        context = await self._context(
+            projection_set_id=projection_set_id,
+            available_only=False,
+        )
+        row = await self.repository.get_projection_player(
+            projection_set_id=context.projection_set.id,
+            player_id=player_id,
+        )
+        if row is None:
+            raise PlayerProjectionNotFoundError
+        player, projection = row
+        eligibilities = await self.repository.get_eligibilities_by_player_ids([player.id])
+        valuation = await self.player_valuation(
+            player_id=player.id,
+            projection_set_id=context.projection_set.id,
+        )
+        best_position_value = self._best_position(valuation.position_values)
+        scoring = self._diagnostic_scoring(
+            league=context.league,
+            projection=projection,
+        )
+        return PlayerValuationDiagnosticsResponse(
+            player=DiagnosticPlayerRead(
+                id=player.id,
+                name=player.full_name,
+                team=player.team,
+                primary_position=player.primary_position,
+                eligible_positions=eligibilities.get(player.id, []),
+            ),
+            projection=DiagnosticProjectionRead(
+                projection_set_id=context.projection_set.id,
+                games=projection.games,
+                minutes_per_game=projection.minutes_per_game,
+                raw_projected_stats={
+                    "fgm": projection.fgm,
+                    "fga": projection.fga,
+                    "ftm": projection.ftm,
+                    "fta": projection.fta,
+                    "rebounds": projection.rebounds,
+                    "assists": projection.assists,
+                    "steals": projection.steals,
+                    "blocks": projection.blocks,
+                    "turnovers": projection.turnovers,
+                    "points": projection.points,
+                },
+            ),
+            scoring=scoring,
+            replacement=DiagnosticReplacementRead(
+                calculation_method=(
+                    "VOR is projected fantasy total minus the replacement-level "
+                    "projected total for each eligible base position; overall VOR "
+                    "uses the best eligible position value."
+                ),
+                replacement_levels=[
+                    DiagnosticReplacementLevelRead(
+                        position=value.position,
+                        replacement_player_id=value.replacement_player_id,
+                        replacement_player_name=value.replacement_player_name,
+                        replacement_fantasy_points=value.replacement_fantasy_points,
+                        vor=value.vor,
+                        position_rank=value.position_rank,
+                    )
+                    for value in valuation.position_values
+                ],
+                selected_replacement_position=best_position_value.position
+                if best_position_value
+                else None,
+                selected_replacement_player_id=best_position_value.replacement_player_id
+                if best_position_value
+                else None,
+                selected_replacement_player_name=best_position_value.replacement_player_name
+                if best_position_value
+                else None,
+                selected_replacement_fantasy_points=best_position_value.replacement_fantasy_points
+                if best_position_value
+                else None,
+                overall_vor=valuation.overall_vor,
+            ),
+            metadata=DiagnosticMetadataRead(
+                league_id=context.league.id,
+                projection_set_id=context.projection_set.id,
+                valuation_algorithm_version=VALUATION_ALGORITHM_VERSION,
+                scoring_format=context.league.scoring_format,
+                assumptions=[
+                    "These values reflect the current bootstrap projection assumptions when bootstrap data is active.",
+                    "Projected total equals Fantasy PPG multiplied by projected games.",
+                    "No scoring, replacement-level, VOR, ranking, recommendation, or draft formula is changed by diagnostics.",
+                ],
+            ),
+        )
+
     async def _context(
         self,
         *,
@@ -286,6 +397,52 @@ class ValuationService:
                 ",".join(scoring_parts),
                 ",".join(slot_parts),
             ]
+        )
+
+    def _diagnostic_scoring(
+        self,
+        *,
+        league: League,
+        projection: PlayerProjection,
+    ) -> DiagnosticScoringRead:
+        scorer = FantasyScorer(league.scoring_rules)
+        contributions = scorer.contributions(projection)
+        fantasy_points_per_game = sum(
+            (item.contribution for item in contributions),
+            Decimal("0"),
+        )
+        return DiagnosticScoringRead(
+            rules=[
+                DiagnosticScoringRuleRead(
+                    stat_key=rule.stat_key,
+                    display_name=rule.display_name,
+                    points=rule.points,
+                    sort_order=rule.sort_order,
+                )
+                for rule in sorted(league.scoring_rules, key=lambda item: item.sort_order)
+            ],
+            contributions=[
+                DiagnosticScoringContributionRead(
+                    stat_name=item.stat_name,
+                    scoring_key=item.scoring_key,
+                    configured_stat_key=item.configured_stat_key,
+                    is_configured=item.configured_stat_key is not None,
+                    projection_value=item.projection_value,
+                    league_weight=item.league_weight,
+                    contribution=item.contribution,
+                )
+                for item in contributions
+            ],
+            unsupported_rules=[
+                DiagnosticUnsupportedScoringRuleRead(
+                    stat_key=item.stat_key,
+                    points=item.points,
+                    message=item.message,
+                )
+                for item in scorer.unsupported_rules
+            ],
+            fantasy_points_per_game=fantasy_points_per_game,
+            projected_fantasy_points=fantasy_points_per_game * projection.games,
         )
 
     async def _compute_valuation_snapshot(

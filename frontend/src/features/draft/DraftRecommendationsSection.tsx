@@ -1,6 +1,8 @@
 import { Fragment } from "react";
 
 import type { AssistantReason, DraftRecommendation, SlotInstance } from "./types";
+import { ExplainedTerm } from "../../shared/ExplainedTerm";
+import { helpText } from "../../shared/helpText";
 
 export function DraftRecommendationsSection({
   draftingPlayerId,
@@ -41,8 +43,12 @@ export function DraftRecommendationsSection({
             <tr>
               <th>Rank</th>
               <th>Player</th>
-              <th>Fit</th>
-              <th>Value</th>
+              <th>
+                <HeaderWithHelp label="Fit" help={helpText.rosterFit} />
+              </th>
+              <th>
+                <HeaderWithHelp label="Value" help={helpText.vor} />
+              </th>
               <th>Why</th>
               <th>Signals</th>
               <th>Watch</th>
@@ -101,7 +107,13 @@ export function DraftRecommendationsSection({
                   <div>{formatNumber(item.overall_vor)} VOR</div>
                   {item.score_breakdown ? (
                     <details className="score-details">
-                      <summary>Score details</summary>
+                      <summary>
+                        <span className="table-heading">
+                          <ExplainedTerm text={helpText.recommendationScore}>
+                            Score details
+                          </ExplainedTerm>
+                        </span>
+                      </summary>
                       <dl>
                         <dt>Total</dt>
                         <dd>{formatNumber(item.score_breakdown.total_score)}</dd>
@@ -160,6 +172,14 @@ export function DraftRecommendationsSection({
         </table>
       )}
     </section>
+  );
+}
+
+function HeaderWithHelp({ label, help }: { label: string; help: string }) {
+  return (
+    <span className="table-heading">
+      <ExplainedTerm text={help}>{label}</ExplainedTerm>
+    </span>
   );
 }
 

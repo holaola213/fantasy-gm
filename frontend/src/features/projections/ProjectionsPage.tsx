@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { ExplainedTerm } from "../../shared/ExplainedTerm";
+import { helpText } from "../../shared/helpText";
 import { useDebouncedValue } from "../../shared/useDebouncedValue";
 
 type ProjectionSource = {
@@ -348,8 +350,12 @@ function RawProjectionTable({ players }: { players: RawProjectionPlayer[] }) {
           <th>Player</th>
           <th>Team</th>
           <th>Position</th>
-          <th>Games</th>
-          <th>Minutes</th>
+          <th>
+            <HeaderWithHelp label="Games" help={helpText.projectedGames} />
+          </th>
+          <th>
+            <HeaderWithHelp label="Minutes" help={helpText.projectedMinutes} />
+          </th>
           <th>FG</th>
           <th>FGA</th>
           <th>FT</th>
@@ -405,10 +411,10 @@ function ScoredProjectionTable({
           <SortableHeader label="Player" sortKey="player" currentSort={sort} direction={direction} onSort={onSort} />
           <SortableHeader label="Team" sortKey="team" currentSort={sort} direction={direction} onSort={onSort} />
           <SortableHeader label="Position" sortKey="position" currentSort={sort} direction={direction} onSort={onSort} />
-          <SortableHeader label="Games" sortKey="games" currentSort={sort} direction={direction} onSort={onSort} />
-          <SortableHeader label="Minutes" sortKey="minutes_per_game" currentSort={sort} direction={direction} onSort={onSort} />
-          <SortableHeader label="Fantasy PPG" sortKey="fantasy_points_per_game" currentSort={sort} direction={direction} onSort={onSort} />
-          <SortableHeader label="Projected Total" sortKey="projected_fantasy_points" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Games" help={helpText.projectedGames} sortKey="games" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Minutes" help={helpText.projectedMinutes} sortKey="minutes_per_game" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Fantasy PPG" help={helpText.fantasyPpg} sortKey="fantasy_points_per_game" currentSort={sort} direction={direction} onSort={onSort} />
+          <SortableHeader label="Projected Total" help={helpText.projectedTotal} sortKey="projected_fantasy_points" currentSort={sort} direction={direction} onSort={onSort} />
         </tr>
       </thead>
       <tbody>
@@ -430,12 +436,14 @@ function ScoredProjectionTable({
 
 function SortableHeader({
   label,
+  help,
   sortKey,
   currentSort,
   direction,
   onSort,
 }: {
   label: string;
+  help?: string;
   sortKey: ProjectionSort;
   currentSort: ProjectionSort;
   direction: SortDirection;
@@ -444,15 +452,36 @@ function SortableHeader({
   const isActive = currentSort === sortKey;
   return (
     <th aria-sort={isActive ? (direction === "asc" ? "ascending" : "descending") : "none"}>
-      <button
-        className="table-sort"
-        onClick={() => onSort(sortKey)}
-        type="button"
-      >
-        {label}
-        {isActive ? ` (${direction})` : ""}
-      </button>
+      {help ? (
+        <ExplainedTerm
+          as="button"
+          className="table-sort"
+          onClick={() => onSort(sortKey)}
+          text={help}
+          type="button"
+        >
+          {label}
+          {isActive ? ` (${direction})` : ""}
+        </ExplainedTerm>
+      ) : (
+        <button
+          className="table-sort"
+          onClick={() => onSort(sortKey)}
+          type="button"
+        >
+          {label}
+          {isActive ? ` (${direction})` : ""}
+        </button>
+      )}
     </th>
+  );
+}
+
+function HeaderWithHelp({ label, help }: { label: string; help: string }) {
+  return (
+    <span className="table-heading">
+      <ExplainedTerm text={help}>{label}</ExplainedTerm>
+    </span>
   );
 }
 

@@ -40,6 +40,8 @@ SCORING_RULE_FIXTURES = [
     ScoringRuleFixture("STL", "Steals", Decimal("2"), 7),
     ScoringRuleFixture("BLK", "Blocks", Decimal("2"), 8),
     ScoringRuleFixture("TO", "Turnovers", Decimal("-1"), 9),
+    ScoringRuleFixture("PTS", "Points", Decimal("1"), 10),
+    ScoringRuleFixture("TEAM_WINS", "Team Wins", Decimal("1"), 11),
 ]
 
 

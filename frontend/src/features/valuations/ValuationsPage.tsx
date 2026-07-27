@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 
+import { ExplainedTerm } from "../../shared/ExplainedTerm";
+import { helpText } from "../../shared/helpText";
 import { useDebouncedValue } from "../../shared/useDebouncedValue";
 
 type SortDirection = "asc" | "desc";
@@ -61,6 +63,70 @@ type ReplacementResponse = {
   positions: ReplacementLevel[];
 };
 
+type ValuationDiagnostics = {
+  player: {
+    id: number;
+    name: string;
+    team: string | null;
+    primary_position: string | null;
+    eligible_positions: string[];
+  };
+  projection: {
+    projection_set_id: number;
+    games: string;
+    minutes_per_game: string;
+    raw_projected_stats: Record<string, string | null>;
+  };
+  scoring: {
+    rules: {
+      stat_key: string;
+      display_name: string;
+      points: string;
+      sort_order: number;
+    }[];
+    contributions: {
+      stat_name: string;
+      scoring_key: string;
+      configured_stat_key: string | null;
+      is_configured: boolean;
+      projection_value: string | null;
+      league_weight: string;
+      contribution: string;
+    }[];
+    unsupported_rules: {
+      stat_key: string;
+      points: string;
+      contribution: string;
+      message: string;
+    }[];
+    fantasy_points_per_game: string;
+    projected_fantasy_points: string;
+  };
+  replacement: {
+    calculation_method: string;
+    replacement_levels: {
+      position: string;
+      replacement_player_id: number;
+      replacement_player_name: string;
+      replacement_fantasy_points: string;
+      vor: string;
+      position_rank: number;
+    }[];
+    selected_replacement_position: string | null;
+    selected_replacement_player_id: number | null;
+    selected_replacement_player_name: string | null;
+    selected_replacement_fantasy_points: string | null;
+    overall_vor: string | null;
+  };
+  metadata: {
+    league_id: number;
+    projection_set_id: number;
+    valuation_algorithm_version: string;
+    scoring_format: string;
+    assumptions: string[];
+  };
+};
+
 export function ValuationsPage() {
   const [players, setPlayers] = useState<PlayerValuation[]>([]);
   const [replacement, setReplacement] = useState<ReplacementResponse | null>(null);
@@ -73,6 +139,9 @@ export function ValuationsPage() {
   const [direction, setDirection] = useState<SortDirection>("asc");
   const [offset, setOffset] = useState(0);
   const [expandedPlayerId, setExpandedPlayerId] = useState<number | null>(null);
+  const [diagnostics, setDiagnostics] = useState<ValuationDiagnostics | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
+  const [isLoadingDiagnostics, setIsLoadingDiagnostics] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const limit = 50;
@@ -167,6 +236,34 @@ export function ValuationsPage() {
     );
   }
 
+  async function loadDiagnostics(playerId: number) {
+    setIsLoadingDiagnostics(true);
+    setDiagnosticError(null);
+    setDiagnostics(null);
+    try {
+      const params = new URLSearchParams();
+      if (context?.projection_set_id) {
+        params.set("projection_set_id", String(context.projection_set_id));
+      }
+      const response = await fetch(
+        `/api/valuations/players/${playerId}/diagnostics${
+          params.toString() ? `?${params.toString()}` : ""
+        }`,
+      );
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail ?? "Unable to load diagnostics.");
+      }
+      setDiagnostics((await response.json()) as ValuationDiagnostics);
+    } catch (error) {
+      setDiagnosticError(
+        error instanceof Error ? error.message : "Unable to load diagnostics.",
+      );
+    } finally {
+      setIsLoadingDiagnostics(false);
+    }
+  }
+
   return (
     <div className="valuations-page">
       {errorMessage ? <p className="state-message error">{errorMessage}</p> : null}
@@ -205,7 +302,12 @@ export function ValuationsPage() {
               <tr>
                 <th>Position</th>
                 <th>Replacement Player</th>
-                <th>Projected Total</th>
+                <th>
+                  <HeaderWithHelp
+                    label="Projected Total"
+                    help={helpText.projectedTotal}
+                  />
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -264,11 +366,14 @@ export function ValuationsPage() {
                 <SortableHeader label="Rank" sortKey="overall_rank" currentSort={sort} direction={direction} onSort={changeSort} />
                 <SortableHeader label="Player" sortKey="player" currentSort={sort} direction={direction} onSort={changeSort} />
                 <SortableHeader label="NBA Team" sortKey="team" currentSort={sort} direction={direction} onSort={changeSort} />
-                <th>Eligible</th>
-                <SortableHeader label="FPPG" sortKey="fantasy_points_per_game" currentSort={sort} direction={direction} onSort={changeSort} />
-                <SortableHeader label="Projected Total" sortKey="projected_fantasy_points" currentSort={sort} direction={direction} onSort={changeSort} />
-                <SortableHeader label="Overall VOR" sortKey="overall_vor" currentSort={sort} direction={direction} onSort={changeSort} />
+                <th>
+                  <HeaderWithHelp label="Eligibility" help={helpText.eligibility} />
+                </th>
+                <SortableHeader label="Fantasy PPG" help={helpText.fantasyPpg} sortKey="fantasy_points_per_game" currentSort={sort} direction={direction} onSort={changeSort} />
+                <SortableHeader label="Projected Total" help={helpText.projectedTotal} sortKey="projected_fantasy_points" currentSort={sort} direction={direction} onSort={changeSort} />
+                <SortableHeader label="Overall VOR" help={helpText.vor} sortKey="overall_vor" currentSort={sort} direction={direction} onSort={changeSort} />
                 <th>Value Position</th>
+                <th>Explain</th>
               </tr>
             </thead>
             <tbody>
@@ -291,14 +396,22 @@ export function ValuationsPage() {
                     </td>
                     <td>{player.team ?? "Unsigned"}</td>
                     <td>{player.eligible_positions.join(", ") || "None"}</td>
-                    <td>{formatNumber(player.fantasy_points_per_game)}</td>
+                    <td>{formatSignedNumber(player.fantasy_points_per_game)}</td>
                     <td>{formatNumber(player.projected_fantasy_points)}</td>
-                    <td>{formatNumber(player.overall_vor)}</td>
+                    <td>{formatVor(player.overall_vor)}</td>
                     <td>{player.best_value_position ?? "None"}</td>
+                    <td>
+                      <button
+                        onClick={() => void loadDiagnostics(player.player_id)}
+                        type="button"
+                      >
+                        Explain
+                      </button>
+                    </td>
                   </tr>
                   {expandedPlayerId === player.player_id ? (
                     <tr key={`${player.player_id}-details`}>
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <PositionDetails values={player.position_values} />
                       </td>
                     </tr>
@@ -328,7 +441,168 @@ export function ValuationsPage() {
           </div>
         </section>
       ) : null}
+      {isLoadingDiagnostics || diagnosticError || diagnostics ? (
+        <DiagnosticsDialog
+          diagnostics={diagnostics}
+          errorMessage={diagnosticError}
+          isLoading={isLoadingDiagnostics}
+          onClose={() => {
+            setDiagnostics(null);
+            setDiagnosticError(null);
+            setIsLoadingDiagnostics(false);
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function DiagnosticsDialog({
+  diagnostics,
+  errorMessage,
+  isLoading,
+  onClose,
+}: {
+  diagnostics: ValuationDiagnostics | null;
+  errorMessage: string | null;
+  isLoading: boolean;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <dialog
+      aria-labelledby="player-valuation-diagnostics-heading"
+      className="diagnostics-dialog"
+      open
+    >
+      <div className="section-header">
+        <h2 id="player-valuation-diagnostics-heading">
+          Player Valuation Diagnostics
+        </h2>
+        <button onClick={onClose} type="button">
+          Close
+        </button>
+      </div>
+      {isLoading ? <p className="state-message">Loading diagnostics...</p> : null}
+      {errorMessage ? <p className="state-message error">{errorMessage}</p> : null}
+      {diagnostics ? (
+        <div className="diagnostics-grid">
+          <p className="assumption-note">
+            These values reflect the current bootstrap projection assumptions.
+          </p>
+          <section className="diagnostics-card">
+            <h3>{diagnostics.player.name}</h3>
+            <p>
+              {diagnostics.player.team ?? "Unsigned"} |{" "}
+              {diagnostics.player.primary_position ?? "Unknown"} | Eligibility:{" "}
+              {diagnostics.player.eligible_positions.join(", ") || "None"}
+            </p>
+            <p>
+              Projected games: {formatNumber(diagnostics.projection.games)}. Projected
+              minutes: {formatNumber(diagnostics.projection.minutes_per_game)}.
+            </p>
+          </section>
+          <section className="diagnostics-card">
+            <h3>Raw Projection</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Stat</th>
+                  <th>Projection</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(diagnostics.projection.raw_projected_stats).map(
+                  ([stat, value]) => (
+                    <tr key={stat}>
+                      <td>{formatStatName(stat)}</td>
+                      <td>{formatNumber(value)}</td>
+                    </tr>
+                  ),
+                )}
+              </tbody>
+            </table>
+          </section>
+          <section className="diagnostics-card">
+            <h3>League Scoring Breakdown</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Stat</th>
+                  <th>Projection</th>
+                  <th>League Weight</th>
+                  <th>Contribution</th>
+                </tr>
+              </thead>
+              <tbody>
+                {diagnostics.scoring.contributions.map((item) => (
+                  <tr key={item.stat_name}>
+                    <td>{item.scoring_key}</td>
+                    <td>{formatNumber(item.projection_value)}</td>
+                    <td>{formatSignedNumber(item.league_weight)}</td>
+                    <td>{formatSignedNumber(item.contribution)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {diagnostics.scoring.unsupported_rules.length > 0 ? (
+              <div className="assumption-note">
+                {diagnostics.scoring.unsupported_rules.map((item) => (
+                  <p key={item.stat_key}>
+                    {item.message} League weight: {formatSignedNumber(item.points)}.
+                    Contribution: {formatSignedNumber(item.contribution)}.
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            <p>
+              Fantasy PPG:{" "}
+              {formatSignedNumber(diagnostics.scoring.fantasy_points_per_game)}.
+              Projected Total:{" "}
+              {formatSignedNumber(diagnostics.scoring.projected_fantasy_points)}.
+            </p>
+          </section>
+          <section className="diagnostics-card">
+            <h3>Replacement Baseline</h3>
+            <p>{diagnostics.replacement.calculation_method}</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Position</th>
+                  <th>Replacement Player</th>
+                  <th>Replacement Total</th>
+                  <th>VOR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {diagnostics.replacement.replacement_levels.map((item) => (
+                  <tr key={item.position}>
+                    <td>{item.position}</td>
+                    <td>{item.replacement_player_name}</td>
+                    <td>{formatNumber(item.replacement_fantasy_points)}</td>
+                    <td>{formatVor(item.vor)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p>
+              Selected baseline:{" "}
+              {diagnostics.replacement.selected_replacement_position ?? "None"} | Overall
+              VOR: {formatVor(diagnostics.replacement.overall_vor)}
+            </p>
+          </section>
+        </div>
+      ) : null}
+    </dialog>
   );
 }
 
@@ -343,8 +617,15 @@ function PositionDetails({ values }: { values: PositionValue[] }) {
           <th>Position</th>
           <th>Position Rank</th>
           <th>Replacement Player</th>
-          <th>Replacement Total</th>
-          <th>VOR</th>
+          <th>
+            <HeaderWithHelp
+              label="Replacement Total"
+              help={helpText.replacementLevel}
+            />
+          </th>
+          <th>
+            <HeaderWithHelp label="VOR" help={helpText.vor} />
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -354,7 +635,7 @@ function PositionDetails({ values }: { values: PositionValue[] }) {
             <td>{value.position_rank}</td>
             <td>{value.replacement_player_name}</td>
             <td>{formatNumber(value.replacement_fantasy_points)}</td>
-            <td>{formatNumber(value.vor)}</td>
+            <td>{formatVor(value.vor)}</td>
           </tr>
         ))}
       </tbody>
@@ -364,12 +645,14 @@ function PositionDetails({ values }: { values: PositionValue[] }) {
 
 function SortableHeader({
   label,
+  help,
   sortKey,
   currentSort,
   direction,
   onSort,
 }: {
   label: string;
+  help?: string;
   sortKey: ValuationSort;
   currentSort: ValuationSort;
   direction: SortDirection;
@@ -378,11 +661,32 @@ function SortableHeader({
   const isActive = currentSort === sortKey;
   return (
     <th aria-sort={isActive ? (direction === "asc" ? "ascending" : "descending") : "none"}>
-      <button className="table-sort" onClick={() => onSort(sortKey)} type="button">
-        {label}
-        {isActive ? ` (${direction})` : ""}
-      </button>
+      {help ? (
+        <ExplainedTerm
+          as="button"
+          className="table-sort"
+          onClick={() => onSort(sortKey)}
+          text={help}
+          type="button"
+        >
+          {label}
+          {isActive ? ` (${direction})` : ""}
+        </ExplainedTerm>
+      ) : (
+        <button className="table-sort" onClick={() => onSort(sortKey)} type="button">
+          {label}
+          {isActive ? ` (${direction})` : ""}
+        </button>
+      )}
     </th>
+  );
+}
+
+function HeaderWithHelp({ label, help }: { label: string; help: string }) {
+  return (
+    <span className="table-heading">
+      <ExplainedTerm text={help}>{label}</ExplainedTerm>
+    </span>
   );
 }
 
@@ -394,4 +698,53 @@ function formatNumber(value: string | null) {
     maximumFractionDigits: 2,
     minimumFractionDigits: 0,
   }).format(Number(value));
+}
+
+function formatSignedNumber(value: string | null) {
+  if (value === null) {
+    return "None";
+  }
+  const numericValue = Number(value);
+  const formatted = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+    signDisplay: "exceptZero",
+  }).format(numericValue);
+  return (
+    <span className={numericValue < 0 ? "value-negative" : undefined}>
+      {formatted}
+    </span>
+  );
+}
+
+function formatVor(value: string | null) {
+  if (value === null) {
+    return "None";
+  }
+  const numericValue = Number(value);
+  return (
+    <span className={numericValue < 0 ? "value-negative" : undefined}>
+      {formatNumber(value)}
+      {numericValue < 0 ? " below replacement" : ""}
+    </span>
+  );
+}
+
+function formatStatName(value: string) {
+  if (value === "rebounds") {
+    return "REB";
+  }
+  if (value === "assists") {
+    return "AST";
+  }
+  if (value === "steals") {
+    return "STL";
+  }
+  if (value === "blocks") {
+    return "BLK";
+  }
+  if (value === "turnovers") {
+    return "TO";
+  }
+  return value.toUpperCase();
 }

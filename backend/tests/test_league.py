@@ -64,6 +64,8 @@ def valid_payload() -> dict:
             {"stat_key": "fgm", "display_name": "Field Goals Made", "points": 1, "sort_order": 1},
             {"stat_key": "reb", "display_name": "Rebounds", "points": 1, "sort_order": 2},
             {"stat_key": "blk", "display_name": "Blocks", "points": 2, "sort_order": 3},
+            {"stat_key": "pts", "display_name": "Points", "points": 1, "sort_order": 4},
+            {"stat_key": "team_wins", "display_name": "Team Wins", "points": 1, "sort_order": 5},
         ],
         "roster_slots": [
             {"slot_key": "pg", "display_name": "Point Guard", "count": 1, "sort_order": 1},
@@ -105,9 +107,11 @@ async def test_get_league_returns_complete_nested_configuration(
     assert body["id"] == 1
     assert body["platform"] == "ESPN"
     assert body["scoring_format"] == "points"
-    assert len(body["scoring_rules"]) == 9
+    assert len(body["scoring_rules"]) == 11
     assert len(body["roster_slots"]) == 10
     assert body["scoring_rules"][0]["stat_key"] == "FGM"
+    assert body["scoring_rules"][9]["stat_key"] == "PTS"
+    assert body["scoring_rules"][10]["stat_key"] == "TEAM_WINS"
     assert body["roster_slots"][7]["slot_key"] == "UTIL"
     assert body["roster_slots"][7]["count"] == 3
 
@@ -128,6 +132,8 @@ async def test_put_league_creates_singleton_and_normalizes_keys(
         "FGM",
         "REB",
         "BLK",
+        "PTS",
+        "TEAM_WINS",
     ]
     assert [slot["slot_key"] for slot in body["roster_slots"]] == ["PG", "UTIL"]
 
@@ -142,7 +148,9 @@ async def test_put_league_updates_fields_and_replaces_children(
     payload["team_count"] = 10
     payload["playoff_team_count"] = 6
     payload["scoring_rules"] = [
-        {"stat_key": "ast", "display_name": "Assists", "points": 1.5, "sort_order": 1}
+        {"stat_key": "ast", "display_name": "Assists", "points": 1.5, "sort_order": 1},
+        {"stat_key": "PTS", "display_name": "Points", "points": 1, "sort_order": 2},
+        {"stat_key": "TEAM_WINS", "display_name": "Team Wins", "points": 1, "sort_order": 3},
     ]
     payload["roster_slots"] = [
         {"slot_key": "be", "display_name": "Bench", "count": 5, "sort_order": 1}
@@ -155,16 +163,19 @@ async def test_put_league_updates_fields_and_replaces_children(
     assert body["name"] == "Updated League"
     assert body["team_count"] == 10
     assert body["playoff_team_count"] == 6
-    assert body["scoring_rules"] == [
-        {
-            "id": body["scoring_rules"][0]["id"],
-            "league_id": 1,
-            "stat_key": "AST",
-            "display_name": "Assists",
-            "points": 1.5,
-            "sort_order": 1,
-        }
+    assert [rule["stat_key"] for rule in body["scoring_rules"]] == [
+        "AST",
+        "PTS",
+        "TEAM_WINS",
     ]
+    assert body["scoring_rules"][0] == {
+        "id": body["scoring_rules"][0]["id"],
+        "league_id": 1,
+        "stat_key": "AST",
+        "display_name": "Assists",
+        "points": 1.5,
+        "sort_order": 1,
+    }
     assert body["roster_slots"][0]["slot_key"] == "BE"
 
 
@@ -189,6 +200,8 @@ async def test_duplicate_scoring_keys_are_rejected_after_normalization(
     payload["scoring_rules"] = [
         {"stat_key": "reb", "display_name": "Rebounds", "points": 1, "sort_order": 1},
         {"stat_key": " ReB ", "display_name": "Boards", "points": 1, "sort_order": 2},
+        {"stat_key": "PTS", "display_name": "Points", "points": 1, "sort_order": 3},
+        {"stat_key": "TEAM_WINS", "display_name": "Team Wins", "points": 1, "sort_order": 4},
     ]
 
     response = await client.put("/league", json=payload)
@@ -219,6 +232,65 @@ async def test_empty_scoring_rules_are_rejected(client: AsyncClient) -> None:
     response = await client.put("/league", json=payload)
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_key", ["PTS", "TEAM_WINS"])
+async def test_fixed_scoring_rules_are_required(
+    client: AsyncClient,
+    missing_key: str,
+) -> None:
+    payload = valid_payload()
+    payload["scoring_rules"] = [
+        rule
+        for rule in payload["scoring_rules"]
+        if rule["stat_key"].strip().upper() != missing_key
+    ]
+
+    response = await client.put("/league", json=payload)
+
+    assert response.status_code == 422
+    assert missing_key in response.text
+    assert "required" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("removed_key", ["PTS", "TEAM_WINS"])
+async def test_fixed_scoring_rules_cannot_be_removed_from_existing_league(
+    client: AsyncClient,
+    removed_key: str,
+) -> None:
+    assert (await client.put("/league", json=valid_payload())).status_code == 200
+    payload = valid_payload()
+    payload["scoring_rules"] = [
+        rule
+        for rule in payload["scoring_rules"]
+        if rule["stat_key"].strip().upper() != removed_key
+    ]
+
+    response = await client.put("/league", json=payload)
+
+    assert response.status_code == 422
+    assert removed_key in response.text
+    assert "required" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stat_key", ["PTS", "TEAM_WINS"])
+async def test_fixed_scoring_rules_reject_non_one_weights(
+    client: AsyncClient,
+    stat_key: str,
+) -> None:
+    payload = valid_payload()
+    for rule in payload["scoring_rules"]:
+        if rule["stat_key"].strip().upper() == stat_key:
+            rule["points"] = 2
+
+    response = await client.put("/league", json=payload)
+
+    assert response.status_code == 422
+    assert stat_key in response.text
+    assert "points = 1" in response.text
 
 
 @pytest.mark.asyncio
@@ -257,11 +329,13 @@ async def test_transaction_rollback_preserves_prior_config_on_child_failure(
     bad_payload["name"] = "Should Roll Back"
     bad_payload["scoring_rules"] = [
         {
-            "stat_key": "PTS",
+            "stat_key": "EXTRA",
             "display_name": "Impossible Precision",
             "points": "123456789012345.1234",
             "sort_order": 1,
-        }
+        },
+        {"stat_key": "PTS", "display_name": "Points", "points": 1, "sort_order": 2},
+        {"stat_key": "TEAM_WINS", "display_name": "Team Wins", "points": 1, "sort_order": 3},
     ]
 
     response = await client.put("/league", json=bad_payload)
@@ -273,6 +347,8 @@ async def test_transaction_rollback_preserves_prior_config_on_child_failure(
         "FGM",
         "REB",
         "BLK",
+        "PTS",
+        "TEAM_WINS",
     ]
 
 
@@ -343,7 +419,7 @@ async def test_seed_is_idempotent_and_does_not_delete_unrelated_children() -> No
                 text("SELECT display_name FROM roster_slots WHERE slot_key = 'EXTRA'")
             )
 
-        assert scoring_count == 10
+        assert scoring_count == 12
         assert roster_count == 11
         assert extra_rule == "Extra Rule"
         assert extra_slot == "Extra Slot"

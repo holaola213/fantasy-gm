@@ -11,6 +11,7 @@ from app.valuations.replacement import (
 from app.valuations.repository import ValuationRepository
 from app.valuations.schemas import (
     PlayerValuationRead,
+    PlayerValuationDiagnosticsResponse,
     ReplacementLevelsResponse,
     SortDirection,
     ValuationListResponse,
@@ -22,6 +23,7 @@ from app.valuations.service import (
     DraftRequiredError,
     LeagueConfigurationRequiredError,
     PlayerValuationNotFoundError,
+    PlayerProjectionNotFoundError,
     ProjectionSetNotFoundError,
     ValuationService,
 )
@@ -99,6 +101,24 @@ async def get_player_valuation(
         raise _http_error(exc) from exc
 
 
+@router.get(
+    "/valuations/players/{player_id}/diagnostics",
+    response_model=PlayerValuationDiagnosticsResponse,
+)
+async def get_player_valuation_diagnostics(
+    player_id: int,
+    service: Annotated[ValuationService, Depends(get_valuation_service)],
+    projection_set_id: int | None = None,
+) -> PlayerValuationDiagnosticsResponse:
+    try:
+        return await service.player_diagnostics(
+            player_id=player_id,
+            projection_set_id=projection_set_id,
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
 def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, LeagueConfigurationRequiredError):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail="league configuration required")
@@ -116,4 +136,6 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail="insufficient eligible player pool")
     if isinstance(exc, PlayerValuationNotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="player valuation not found")
+    if isinstance(exc, PlayerProjectionNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="player projection not found")
     return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="valuation could not be calculated")

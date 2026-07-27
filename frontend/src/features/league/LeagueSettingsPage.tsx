@@ -52,6 +52,23 @@ type LeagueResponse = Omit<
   roster_slots: LeagueRosterSlotResponse[];
 };
 
+const fixedScoringRules = {
+  PTS: {
+    display_name: "Points",
+    points: "1",
+    sort_order: 10,
+  },
+  TEAM_WINS: {
+    display_name: "Team Wins",
+    points: "1",
+    sort_order: 11,
+  },
+} as const;
+
+function isFixedScoringKey(value: string) {
+  return normalizeKey(value) in fixedScoringRules;
+}
+
 const defaultLeagueForm: LeagueForm = {
   name: "Fantasy GM Development League",
   platform: "ESPN",
@@ -70,6 +87,8 @@ const defaultLeagueForm: LeagueForm = {
     { client_id: "default-scoring-STL", stat_key: "STL", display_name: "Steals", points: "2", sort_order: 7 },
     { client_id: "default-scoring-BLK", stat_key: "BLK", display_name: "Blocks", points: "2", sort_order: 8 },
     { client_id: "default-scoring-TO", stat_key: "TO", display_name: "Turnovers", points: "-1", sort_order: 9 },
+    { client_id: "default-scoring-PTS", stat_key: "PTS", display_name: "Points", points: "1", sort_order: 10 },
+    { client_id: "default-scoring-TEAM_WINS", stat_key: "TEAM_WINS", display_name: "Team Wins", points: "1", sort_order: 11 },
   ],
   roster_slots: [
     { client_id: "default-slot-PG", slot_key: "PG", display_name: "Point Guard", count: 1, sort_order: 1 },
@@ -102,11 +121,13 @@ function leagueResponseToForm(league: LeagueResponse): LeagueForm {
     scoring_format: league.scoring_format,
     acquisition_limit_per_day: league.acquisition_limit_per_day ?? "",
     playoff_team_count: league.playoff_team_count,
-    scoring_rules: league.scoring_rules.map((rule) => ({
-      ...rule,
-      client_id: `saved-scoring-${rule.stat_key}-${rule.sort_order}`,
-      points: String(rule.points),
-    })),
+    scoring_rules: ensureFixedScoringRules(
+      league.scoring_rules.map((rule) => ({
+        ...rule,
+        client_id: `saved-scoring-${rule.stat_key}-${rule.sort_order}`,
+        points: String(rule.points),
+      })),
+    ),
     roster_slots: league.roster_slots.map((slot) => ({
       ...slot,
       client_id: `saved-slot-${slot.slot_key}-${slot.sort_order}`,
@@ -116,6 +137,38 @@ function leagueResponseToForm(league: LeagueResponse): LeagueForm {
 
 function normalizeKey(value: string) {
   return value.trim().toUpperCase();
+}
+
+function ensureFixedScoringRules(rules: ScoringRule[]) {
+  const byKey = new Map(rules.map((rule) => [normalizeKey(rule.stat_key), rule]));
+  const nextRules = [...rules];
+  for (const [statKey, fixedRule] of Object.entries(fixedScoringRules)) {
+    const existing = byKey.get(statKey);
+    if (existing) {
+      const index = nextRules.indexOf(existing);
+      nextRules[index] = {
+        ...existing,
+        stat_key: statKey,
+        points: fixedRule.points,
+        display_name: existing.display_name.trim()
+          ? existing.display_name
+          : fixedRule.display_name,
+      };
+      continue;
+    }
+    nextRules.push({
+      client_id: `fixed-scoring-${statKey}`,
+      stat_key: statKey,
+      display_name: fixedRule.display_name,
+      points: fixedRule.points,
+      sort_order: fixedRule.sort_order,
+    });
+  }
+  return nextRules.sort((left, right) => {
+    const leftSort = isValidNumber(left.sort_order) ? left.sort_order : 999;
+    const rightSort = isValidNumber(right.sort_order) ? right.sort_order : 999;
+    return leftSort - rightSort;
+  });
 }
 
 function parseNumberInput(value: string): NumberInputValue {
@@ -294,6 +347,18 @@ export function LeagueSettingsPage() {
     if (form.scoring_rules.some((rule) => Number.isNaN(Number(rule.points)))) {
       errors.push("Scoring rule points must be valid decimal numbers.");
     }
+    for (const [statKey, fixedRule] of Object.entries(fixedScoringRules)) {
+      const rule = form.scoring_rules.find(
+        (item) => normalizeKey(item.stat_key) === statKey,
+      );
+      if (!rule) {
+        errors.push(`${statKey} is required for this fixed ESPN points league.`);
+        continue;
+      }
+      if (rule.points !== fixedRule.points) {
+        errors.push(`${statKey} must remain ${fixedRule.points} point.`);
+      }
+    }
 
     return errors;
   }
@@ -327,7 +392,7 @@ export function LeagueSettingsPage() {
       acquisition_limit_per_day:
         form.acquisition_limit_per_day === "" ? null : form.acquisition_limit_per_day,
       playoff_team_count: form.playoff_team_count,
-      scoring_rules: form.scoring_rules.map((rule) => ({
+      scoring_rules: ensureFixedScoringRules(form.scoring_rules).map((rule) => ({
         stat_key: normalizeKey(rule.stat_key),
         display_name: rule.display_name,
         points: Number(rule.points),
@@ -477,7 +542,12 @@ export function LeagueSettingsPage() {
         onRemove={(index) =>
           updateFormField(
             "scoring_rules",
-            form.scoring_rules.filter((_, ruleIndex) => ruleIndex !== index),
+            ensureFixedScoringRules(
+              form.scoring_rules.filter(
+                (rule, ruleIndex) =>
+                  ruleIndex !== index || isFixedScoringKey(rule.stat_key),
+              ),
+            ),
           )
         }
         onUpdate={updateScoringRule}
@@ -536,6 +606,11 @@ function EditableScoringRules({
         <h2>Scoring Rules</h2>
         <button onClick={onAdd} type="button">Add Rule</button>
       </div>
+      <p className="state-message">
+        PTS and TEAM_WINS are required fixed rules for this ESPN points league.
+        TEAM_WINS is part of league scoring but is not projected yet, so it
+        currently contributes 0 in diagnostics and valuations.
+      </p>
       <table>
         <thead>
           <tr>
@@ -549,14 +624,20 @@ function EditableScoringRules({
         <tbody>
           {rules.map((rule, index) => (
             <tr key={rule.client_id}>
+              {(() => {
+                const isFixed = isFixedScoringKey(rule.stat_key);
+                return (
+                  <>
               <td>
                 <input
+                  readOnly={isFixed}
                   value={rule.stat_key}
                   onChange={(event) =>
                     onUpdate(index, "stat_key", event.target.value)
                   }
                   aria-label={`Scoring rule ${index + 1} stat key`}
                 />
+                {isFixed ? <span className="muted-detail">Required</span> : null}
               </td>
               <td>
                 <input
@@ -569,12 +650,16 @@ function EditableScoringRules({
               </td>
               <td>
                 <input
+                  readOnly={isFixed}
                   value={rule.points}
                   onChange={(event) =>
                     onUpdate(index, "points", event.target.value)
                   }
                   aria-label={`Scoring rule ${index + 1} points`}
                 />
+                {normalizeKey(rule.stat_key) === "TEAM_WINS" ? (
+                  <span className="muted-detail">Configured, not projected yet.</span>
+                ) : null}
               </td>
               <td>
                 <input
@@ -587,8 +672,17 @@ function EditableScoringRules({
                 />
               </td>
               <td>
-                <button onClick={() => onRemove(index)} type="button">Remove</button>
+                <button
+                  disabled={isFixed}
+                  onClick={() => onRemove(index)}
+                  type="button"
+                >
+                  {isFixed ? "Required" : "Remove"}
+                </button>
               </td>
+                  </>
+                );
+              })()}
             </tr>
           ))}
         </tbody>

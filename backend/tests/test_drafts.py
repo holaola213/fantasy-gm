@@ -111,6 +111,8 @@ def small_league_payload() -> dict:
         "scoring_rules": [
             {"stat_key": "FGM", "display_name": "Field Goals Made", "points": 1, "sort_order": 1},
             {"stat_key": "REB", "display_name": "Rebounds", "points": 1, "sort_order": 2},
+            {"stat_key": "PTS", "display_name": "Points", "points": 1, "sort_order": 3},
+            {"stat_key": "TEAM_WINS", "display_name": "Team Wins", "points": 1, "sort_order": 4},
         ],
         "roster_slots": [
             {"slot_key": "PG", "display_name": "Point Guard", "count": 1, "sort_order": 1},

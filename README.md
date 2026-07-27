@@ -11,6 +11,11 @@ automated drafting bot. It is a local draft decision tool built around one user,
 one ESPN-style points league, deterministic projections, and explainable draft
 recommendations.
 
+The league configuration targets one fixed ESPN points format. `PTS = +1` and
+`TEAM_WINS = +1` are mandatory scoring rules. `TEAM_WINS` is part of the league
+scoring configuration but is not projected yet, so it currently contributes `0`
+in valuation diagnostics.
+
 Current status: v0.3 is in progress and focuses on production-ready projection
 data infrastructure. Completed capabilities include local PostgreSQL/FastAPI/
 React orchestration, league scoring, players, projection snapshots, valuation,
@@ -352,6 +357,10 @@ Invoke-RestMethod "http://localhost:8000/league" -Method Put -ContentType "appli
 `PUT /league` replaces the singleton league, scoring rules, and roster slots in
 one database transaction. The frontend exposes this through the League Settings
 view at `http://localhost:5173`.
+
+Fantasy GM is built for one fixed ESPN points league. League saves must include
+the required scoring rules `PTS = +1` and `TEAM_WINS = +1`; other scoring rules
+remain editable for the local configuration.
 
 ## Projections API
 

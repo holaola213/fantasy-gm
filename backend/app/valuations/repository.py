@@ -67,6 +67,21 @@ class ValuationRepository:
         )
         return list(result.all())
 
+    async def get_projection_player(
+        self,
+        *,
+        projection_set_id: int,
+        player_id: int,
+    ) -> tuple[Player, PlayerProjection] | None:
+        result = await self.session.execute(
+            select(Player, PlayerProjection)
+            .join(PlayerProjection, PlayerProjection.player_id == Player.id)
+            .where(PlayerProjection.projection_set_id == projection_set_id)
+            .where(Player.id == player_id)
+            .where(Player.is_active.is_(True))
+        )
+        return result.one_or_none()
+
     async def get_eligibilities_by_player_ids(
         self, player_ids: list[int]
     ) -> dict[int, list[str]]:

@@ -73,6 +73,8 @@ def league_payload() -> dict:
             {"stat_key": "FGM", "display_name": "Field Goals Made", "points": 1, "sort_order": 1},
             {"stat_key": "FGA", "display_name": "Field Goals Attempted", "points": -1, "sort_order": 2},
             {"stat_key": "REB", "display_name": "Rebounds", "points": 1, "sort_order": 3},
+            {"stat_key": "PTS", "display_name": "Points", "points": 1, "sort_order": 4},
+            {"stat_key": "TEAM_WINS", "display_name": "Team Wins", "points": 1, "sort_order": 5},
         ],
         "roster_slots": [
             {"slot_key": "PG", "display_name": "Point Guard", "count": 1, "sort_order": 1},
@@ -444,8 +446,8 @@ async def test_projection_players_include_decimal_fantasy_calculations(
     assert body["total"] == 3
     assert jokic["full_name"] == "Nikola Jokic"
     assert jokic["games"] == 70.5
-    assert jokic["fantasy_points_per_game"] == 4
-    assert jokic["projected_fantasy_points"] == 282
+    assert jokic["fantasy_points_per_game"] == 30
+    assert jokic["projected_fantasy_points"] == 2115
 
 
 @pytest.mark.asyncio
@@ -496,7 +498,7 @@ async def test_projection_players_support_sorting_and_validation(
     assert minutes_response.status_code == 200
     assert minutes_response.json()["items"][0]["full_name"] == "Shai Gilgeous-Alexander"
     assert fantasy_response.status_code == 200
-    assert fantasy_response.json()["items"][0]["full_name"] == "Shai Gilgeous-Alexander"
+    assert fantasy_response.json()["items"][0]["full_name"] == "Anthony Edwards"
     assert invalid_response.status_code == 422
 
 

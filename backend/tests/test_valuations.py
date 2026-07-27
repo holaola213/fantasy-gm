@@ -77,6 +77,8 @@ def league_payload(team_count: int = 2) -> dict:
         "playoff_team_count": 2,
         "scoring_rules": [
             {"stat_key": "FGM", "display_name": "Field Goals Made", "points": 1, "sort_order": 1},
+            {"stat_key": "PTS", "display_name": "Points", "points": 1, "sort_order": 2},
+            {"stat_key": "TEAM_WINS", "display_name": "Team Wins", "points": 1, "sort_order": 3},
         ],
         "roster_slots": [
             {"slot_key": "PG", "display_name": "Point Guard", "count": 1, "sort_order": 1},
@@ -191,6 +193,30 @@ async def seed_valuation_pool(client: AsyncClient) -> None:
         await session.commit()
 
 
+async def replace_scoring_rules(client: AsyncClient, rules: list[dict]) -> None:
+    payload = league_payload()
+    payload["scoring_rules"] = rules
+    response = await client.put("/league", json=payload)
+    assert response.status_code == 200
+
+
+async def set_player_projection_points(
+    client: AsyncClient,
+    *,
+    player_id: int,
+    points: Decimal | None,
+) -> None:
+    async with client.session_factory() as session:
+        await session.execute(
+            text(
+                "UPDATE player_projections SET points = :points "
+                "WHERE player_id = :player_id"
+            ),
+            {"points": points, "player_id": player_id},
+        )
+        await session.commit()
+
+
 @pytest.mark.asyncio
 async def test_replacement_levels_use_active_slots_and_drafted_target(
     client: AsyncClient,
@@ -264,6 +290,184 @@ async def test_single_player_valuation_and_missing_player(client: AsyncClient) -
     assert response.json()["player_id"] == 1
     assert missing.status_code == 404
     assert missing.json() == {"detail": "player valuation not found"}
+
+
+@pytest.mark.asyncio
+async def test_player_diagnostics_exposes_scoring_and_replacement_chain(
+    client: AsyncClient,
+) -> None:
+    await seed_valuation_pool(client)
+
+    response = await client.get("/valuations/players/1/diagnostics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["player"] == {
+        "id": 1,
+        "name": "Alpha Guard",
+        "team": "TST",
+        "primary_position": "PG",
+        "eligible_positions": ["PG", "SG"],
+    }
+    assert body["projection"]["games"] == "1.00"
+    assert body["projection"]["minutes_per_game"] == "20.00"
+    assert body["projection"]["raw_projected_stats"]["fgm"] == "125.000"
+    assert body["scoring"]["fantasy_points_per_game"] == "125.00"
+    assert body["scoring"]["projected_fantasy_points"] == "125.00"
+    assert isinstance(body["scoring"]["fantasy_points_per_game"], str)
+
+    contribution_sum = sum(
+        Decimal(item["contribution"]) for item in body["scoring"]["contributions"]
+    )
+    assert contribution_sum == Decimal(body["scoring"]["fantasy_points_per_game"])
+    assert (
+        Decimal(body["scoring"]["projected_fantasy_points"])
+        == Decimal(body["scoring"]["fantasy_points_per_game"])
+        * Decimal(body["projection"]["games"])
+    )
+
+    valuation = (await client.get("/players/1/valuation")).json()
+    assert body["replacement"]["overall_vor"] == valuation["overall_vor"]
+    assert body["replacement"]["selected_replacement_position"] in {"PG", "SG"}
+    assert {item["position"] for item in body["replacement"]["replacement_levels"]} == {
+        "PG",
+        "SG",
+    }
+    assert body["metadata"]["valuation_algorithm_version"] == "replacement-v2"
+
+
+@pytest.mark.asyncio
+async def test_pts_scoring_rule_contributes_to_valuations_and_diagnostics(
+    client: AsyncClient,
+) -> None:
+    await seed_valuation_pool(client)
+    await set_player_projection_points(
+        client,
+        player_id=1,
+        points=Decimal("12.500"),
+    )
+
+    diagnostics = (await client.get("/valuations/players/1/diagnostics")).json()
+    valuation = (
+        await client.get("/valuations", params={"search": "Alpha Guard"})
+    ).json()["items"][0]
+    pts_row = next(
+        item
+        for item in diagnostics["scoring"]["contributions"]
+        if item["scoring_key"] == "PTS"
+    )
+
+    assert pts_row == {
+        "stat_name": "points",
+        "scoring_key": "PTS",
+        "configured_stat_key": "PTS",
+        "is_configured": True,
+        "projection_value": "12.50",
+        "league_weight": "1.00",
+        "contribution": "12.50",
+    }
+    assert diagnostics["scoring"]["fantasy_points_per_game"] == "137.50"
+    assert valuation["fantasy_points_per_game"] == "137.50"
+    assert diagnostics["scoring"]["fantasy_points_per_game"] == valuation[
+        "fantasy_points_per_game"
+    ]
+    assert diagnostics["scoring"]["projected_fantasy_points"] == (
+        Decimal("137.50") * Decimal(diagnostics["projection"]["games"])
+    ).quantize(Decimal("0.01")).to_eng_string()
+
+
+@pytest.mark.asyncio
+async def test_missing_projection_points_follow_zero_policy(
+    client: AsyncClient,
+) -> None:
+    await seed_valuation_pool(client)
+    await set_player_projection_points(client, player_id=1, points=None)
+
+    missing_projection = (await client.get("/valuations/players/1/diagnostics")).json()
+    missing_projection_pts = next(
+        item
+        for item in missing_projection["scoring"]["contributions"]
+        if item["scoring_key"] == "PTS"
+    )
+    assert missing_projection_pts["is_configured"] is True
+    assert missing_projection_pts["projection_value"] is None
+    assert missing_projection_pts["league_weight"] == "1.00"
+    assert missing_projection_pts["contribution"] == "0.00"
+    assert missing_projection["scoring"]["fantasy_points_per_game"] == "125.00"
+
+
+@pytest.mark.asyncio
+async def test_team_wins_is_reported_as_unsupported_zero_contribution(
+    client: AsyncClient,
+) -> None:
+    await seed_valuation_pool(client)
+    await set_player_projection_points(
+        client,
+        player_id=1,
+        points=Decimal("12.500"),
+    )
+
+    diagnostics = (await client.get("/valuations/players/1/diagnostics")).json()
+
+    assert diagnostics["scoring"]["unsupported_rules"] == [
+        {
+            "stat_key": "TEAM_WINS",
+            "points": "1.00",
+            "contribution": "0.00",
+            "message": (
+                "TEAM_WINS is configured in this league but is not currently "
+                "projected, so it contributes 0."
+            ),
+        }
+    ]
+    contribution_sum = sum(
+        Decimal(item["contribution"])
+        for item in diagnostics["scoring"]["contributions"]
+    )
+    assert contribution_sum == Decimal(diagnostics["scoring"]["fantasy_points_per_game"])
+
+
+@pytest.mark.asyncio
+async def test_player_diagnostics_missing_player_and_missing_league(
+    client: AsyncClient,
+) -> None:
+    missing_league = await client.get("/valuations/players/1/diagnostics")
+    assert missing_league.status_code == 409
+    assert missing_league.json() == {"detail": "league configuration required"}
+
+    await seed_valuation_pool(client)
+    missing_player = await client.get("/valuations/players/999/diagnostics")
+    assert missing_player.status_code == 404
+    assert missing_player.json() == {"detail": "player projection not found"}
+
+
+@pytest.mark.asyncio
+async def test_player_diagnostics_does_not_mutate_data(client: AsyncClient) -> None:
+    await seed_valuation_pool(client)
+    async with client.session_factory() as session:
+        before_players = await session.scalar(text("SELECT count(*) FROM players"))
+        before_projections = await session.scalar(
+            text("SELECT count(*) FROM player_projections")
+        )
+        before_eligibilities = await session.scalar(
+            text("SELECT count(*) FROM player_eligibilities")
+        )
+
+    response = await client.get("/valuations/players/1/diagnostics")
+    assert response.status_code == 200
+
+    async with client.session_factory() as session:
+        after_players = await session.scalar(text("SELECT count(*) FROM players"))
+        after_projections = await session.scalar(
+            text("SELECT count(*) FROM player_projections")
+        )
+        after_eligibilities = await session.scalar(
+            text("SELECT count(*) FROM player_eligibilities")
+        )
+
+    assert after_players == before_players
+    assert after_projections == before_projections
+    assert after_eligibilities == before_eligibilities
 
 
 @pytest.mark.asyncio

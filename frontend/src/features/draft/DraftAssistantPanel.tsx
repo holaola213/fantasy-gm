@@ -5,6 +5,8 @@ import type {
   SlotInstance,
 } from "./types";
 import { DraftRecommendationsSection } from "./DraftRecommendationsSection";
+import { ExplainedTerm } from "../../shared/ExplainedTerm";
+import { helpText } from "../../shared/helpText";
 
 export function DraftAssistantPanel({
   assistant,
@@ -181,7 +183,13 @@ function DraftIntelligenceSummary({ assistant }: { assistant: DraftAssistant }) 
       </section>
 
       <section className="assistant-section">
-        <h3>Availability Outlook</h3>
+        <h3>
+          <span className="table-heading">
+            <ExplainedTerm text={helpText.availabilityOutlook}>
+              Availability Outlook
+            </ExplainedTerm>
+          </span>
+        </h3>
         {intelligence.availability_outlook.length === 0 ? (
           <p className="state-message">No available players to analyze.</p>
         ) : (
@@ -191,7 +199,12 @@ function DraftIntelligenceSummary({ assistant }: { assistant: DraftAssistant }) 
                 <th>Rank</th>
                 <th>Player</th>
                 <th>Outlook</th>
-                <th>Projected Total</th>
+                <th>
+                  <HeaderWithHelp
+                    label="Projected Total"
+                    help={helpText.projectedTotal}
+                  />
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -209,14 +222,22 @@ function DraftIntelligenceSummary({ assistant }: { assistant: DraftAssistant }) 
       </section>
 
       <section className="assistant-section">
-        <h3>Positional Scarcity</h3>
+        <h3>
+          <span className="table-heading">
+            <ExplainedTerm text={helpText.positionalScarcity}>
+              Positional Scarcity
+            </ExplainedTerm>
+          </span>
+        </h3>
         <table>
           <thead>
             <tr>
               <th>Position</th>
               <th>Severity</th>
               <th>Top Option</th>
-              <th>VOR Drop</th>
+              <th>
+                <HeaderWithHelp label="VOR Drop" help={helpText.vorDrop} />
+              </th>
               <th>Depth</th>
             </tr>
           </thead>
@@ -277,8 +298,15 @@ function AssistantOptionSection({
               <th>Team</th>
               <th>Eligibility</th>
               <th>Rank</th>
-              <th>Overall VOR</th>
-              <th>Projected Total</th>
+              <th>
+                <HeaderWithHelp label="Overall VOR" help={helpText.vor} />
+              </th>
+              <th>
+                <HeaderWithHelp
+                  label="Projected Total"
+                  help={helpText.projectedTotal}
+                />
+              </th>
               <th>Reasons</th>
               <th>Pick</th>
             </tr>
@@ -317,6 +345,14 @@ function AssistantOptionSection({
         </table>
       )}
     </section>
+  );
+}
+
+function HeaderWithHelp({ label, help }: { label: string; help: string }) {
+  return (
+    <span className="table-heading">
+      <ExplainedTerm text={help}>{label}</ExplainedTerm>
+    </span>
   );
 }
 

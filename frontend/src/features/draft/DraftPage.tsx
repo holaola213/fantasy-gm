@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { DraftAssistantPanel } from "./DraftAssistantPanel";
+import { ExplainedTerm } from "../../shared/ExplainedTerm";
+import { helpText } from "../../shared/helpText";
 import { useDebouncedValue } from "../../shared/useDebouncedValue";
 import type {
   AvailablePlayer,
@@ -911,12 +913,14 @@ function AvailablePlayersTable({
                 <SortableHeader label="Player" sortKey="player" currentSort={sort} direction={direction} onSort={onSort} />
                 <SortableHeader label="Team" sortKey="team" currentSort={sort} direction={direction} onSort={onSort} />
                 <SortableHeader label="Position" sortKey="position" currentSort={sort} direction={direction} onSort={onSort} />
-                <th>Eligible</th>
+                <th>
+                  <HeaderWithHelp label="Eligibility" help={helpText.eligibility} />
+                </th>
                 <th>Slots</th>
                 <SortableHeader label="Overall Rank" sortKey="overall_rank" currentSort={sort} direction={direction} onSort={onSort} />
-                <SortableHeader label="Fantasy PPG" sortKey="fantasy_points_per_game" currentSort={sort} direction={direction} onSort={onSort} />
-                <SortableHeader label="Projected Total" sortKey="projected_fantasy_points" currentSort={sort} direction={direction} onSort={onSort} />
-                <SortableHeader label="Overall VOR" sortKey="overall_vor" currentSort={sort} direction={direction} onSort={onSort} />
+                <SortableHeader label="Fantasy PPG" help={helpText.fantasyPpg} sortKey="fantasy_points_per_game" currentSort={sort} direction={direction} onSort={onSort} />
+                <SortableHeader label="Projected Total" help={helpText.projectedTotal} sortKey="projected_fantasy_points" currentSort={sort} direction={direction} onSort={onSort} />
+                <SortableHeader label="Overall VOR" help={helpText.vor} sortKey="overall_vor" currentSort={sort} direction={direction} onSort={onSort} />
                 <th>Value Position</th>
                 <th>Pick</th>
               </tr>
@@ -991,12 +995,14 @@ function DraftPicksTable({ picks }: { picks: DraftPick[] }) {
 
 function SortableHeader({
   label,
+  help,
   sortKey,
   currentSort,
   direction,
   onSort,
 }: {
   label: string;
+  help?: string;
   sortKey: DraftSort;
   currentSort: DraftSort;
   direction: SortDirection;
@@ -1005,11 +1011,32 @@ function SortableHeader({
   const isActive = currentSort === sortKey;
   return (
     <th aria-sort={isActive ? (direction === "asc" ? "ascending" : "descending") : "none"}>
-      <button className="table-sort" onClick={() => onSort(sortKey)} type="button">
-        {label}
-        {isActive ? ` (${direction})` : ""}
-      </button>
+      {help ? (
+        <ExplainedTerm
+          as="button"
+          className="table-sort"
+          onClick={() => onSort(sortKey)}
+          text={help}
+          type="button"
+        >
+          {label}
+          {isActive ? ` (${direction})` : ""}
+        </ExplainedTerm>
+      ) : (
+        <button className="table-sort" onClick={() => onSort(sortKey)} type="button">
+          {label}
+          {isActive ? ` (${direction})` : ""}
+        </button>
+      )}
     </th>
+  );
+}
+
+function HeaderWithHelp({ label, help }: { label: string; help: string }) {
+  return (
+    <span className="table-heading">
+      <ExplainedTerm text={help}>{label}</ExplainedTerm>
+    </span>
   );
 }
 
