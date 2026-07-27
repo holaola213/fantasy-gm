@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from collections import OrderedDict
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -27,6 +29,10 @@ from app.valuations.schemas import (
     ReplacementLevelRead,
     ReplacementLevelsResponse,
 )
+
+VALUATION_ALGORITHM_VERSION = "replacement-v1"
+VALUATION_CACHE_MAX_ENTRIES = 8
+ValuationCacheKey = tuple[int, str, int, str, str, int, str | None]
 
 
 class LeagueConfigurationRequiredError(Exception):
@@ -58,6 +64,19 @@ class _ValuationContext:
     league: League
     projection_set: ProjectionSet
     draft_id: int | None
+
+
+@dataclass(frozen=True)
+class _ValuationSnapshot:
+    items: list[PlayerValuationRead]
+    levels: dict[str, ReplacementLevel]
+    demand: dict[str, int]
+    drafted_target: int
+
+
+_valuation_cache: OrderedDict[ValuationCacheKey, _ValuationSnapshot] = OrderedDict()
+_valuation_in_flight: dict[ValuationCacheKey, asyncio.Task[_ValuationSnapshot]] = {}
+_latest_league_configuration_fingerprints: dict[int, str] = {}
 
 
 @dataclass(frozen=True)
@@ -112,12 +131,7 @@ class ValuationService:
             projection_set_id=projection_set_id,
             available_only=False,
         )
-        seeds = await self._seeds(context)
-        levels, demand, drafted_target, _ = calculate_replacement_levels(
-            candidates=self._candidates(seeds),
-            roster_slot_counts=self._roster_slot_counts(context.league),
-            team_count=context.league.team_count,
-        )
+        snapshot = await self._valuation_snapshot(context)
         return ReplacementLevelsResponse(
             projection_set_id=context.projection_set.id,
             projection_set_name=context.projection_set.name,
@@ -125,17 +139,19 @@ class ValuationService:
             team_count=context.league.team_count,
             active_slot_demand=[
                 ActiveSlotDemandRead(slot_key=slot_key, count=count)
-                for slot_key, count in sorted(demand.items())
+                for slot_key, count in sorted(snapshot.demand.items())
             ],
-            total_active_demand=sum(demand.values()),
-            drafted_player_target=drafted_target,
+            total_active_demand=sum(snapshot.demand.values()),
+            drafted_player_target=snapshot.drafted_target,
             positions=[
                 ReplacementLevelRead(
                     position=position,
-                    demand=levels[position].demand,
-                    replacement_player_id=levels[position].replacement_player_id,
-                    replacement_player_name=levels[position].replacement_player_name,
-                    replacement_fantasy_points=levels[position].replacement_fantasy_points,
+                    demand=snapshot.levels[position].demand,
+                    replacement_player_id=snapshot.levels[position].replacement_player_id,
+                    replacement_player_name=snapshot.levels[position].replacement_player_name,
+                    replacement_fantasy_points=snapshot.levels[
+                        position
+                    ].replacement_fantasy_points,
                 )
                 for position in BASE_POSITION_ORDER
             ],
@@ -193,15 +209,103 @@ class ValuationService:
         )
 
     async def _all_valuations(self, context: _ValuationContext) -> list[PlayerValuationRead]:
+        snapshot = await self._valuation_snapshot(context)
+        return list(snapshot.items)
+
+    async def _valuation_snapshot(self, context: _ValuationContext) -> _ValuationSnapshot:
+        cache_key = await self._cache_key(context)
+        self._clear_stale_league_entries(cache_key)
+        cached = _valuation_cache.get(cache_key)
+        if cached is not None:
+            _valuation_cache.move_to_end(cache_key)
+            return cached
+
+        in_flight = _valuation_in_flight.get(cache_key)
+        if in_flight is not None:
+            return await in_flight
+
+        task = asyncio.create_task(self._compute_valuation_snapshot(context))
+        _valuation_in_flight[cache_key] = task
+        try:
+            snapshot = await task
+        finally:
+            if _valuation_in_flight.get(cache_key) is task:
+                _valuation_in_flight.pop(cache_key, None)
+        _valuation_cache[cache_key] = snapshot
+        _valuation_cache.move_to_end(cache_key)
+        while len(_valuation_cache) > VALUATION_CACHE_MAX_ENTRIES:
+            _valuation_cache.popitem(last=False)
+        return snapshot
+
+    async def _cache_key(self, context: _ValuationContext) -> ValuationCacheKey:
+        eligibility_count, latest_eligibility = (
+            await self.repository.projection_eligibility_fingerprint(
+                context.projection_set.id
+            )
+        )
+        return (
+            context.league.id,
+            self._league_configuration_fingerprint(context.league),
+            context.projection_set.id,
+            context.projection_set.imported_at.isoformat(),
+            VALUATION_ALGORITHM_VERSION,
+            eligibility_count,
+            latest_eligibility.isoformat() if latest_eligibility else None,
+        )
+
+    def _clear_stale_league_entries(self, cache_key: ValuationCacheKey) -> None:
+        league_id, league_fingerprint = cache_key[0], cache_key[1]
+        latest_fingerprint = _latest_league_configuration_fingerprints.get(league_id)
+        if latest_fingerprint == league_fingerprint:
+            return
+        for existing_key in list(_valuation_cache):
+            if existing_key[0] == league_id:
+                _valuation_cache.pop(existing_key, None)
+        for existing_key in list(_valuation_in_flight):
+            if existing_key[0] == league_id:
+                _valuation_in_flight.pop(existing_key, None)
+        _latest_league_configuration_fingerprints[league_id] = league_fingerprint
+
+    def _league_configuration_fingerprint(self, league: League) -> str:
+        scoring_parts = [
+            f"{rule.stat_key}:{rule.points}:{rule.sort_order}"
+            for rule in sorted(league.scoring_rules, key=lambda item: item.stat_key)
+        ]
+        slot_parts = [
+            f"{slot.slot_key}:{slot.count}:{slot.sort_order}"
+            for slot in sorted(league.roster_slots, key=lambda item: item.slot_key)
+        ]
+        return "|".join(
+            [
+                league.platform,
+                str(league.season),
+                str(league.team_count),
+                league.scoring_format,
+                str(league.acquisition_limit_per_day),
+                str(league.playoff_team_count),
+                ",".join(scoring_parts),
+                ",".join(slot_parts),
+            ]
+        )
+
+    async def _compute_valuation_snapshot(
+        self,
+        context: _ValuationContext,
+    ) -> _ValuationSnapshot:
         seeds = await self._seeds(context)
-        levels, _, _, _ = calculate_replacement_levels(
+        levels, demand, drafted_target, _ = calculate_replacement_levels(
             candidates=self._candidates(seeds),
             roster_slot_counts=self._roster_slot_counts(context.league),
             team_count=context.league.team_count,
         )
         items = [self._read(seed, levels) for seed in seeds]
         self._assign_ranks(items)
-        return items
+        return _ValuationSnapshot(
+            items=items,
+            levels=levels,
+            demand=demand,
+            drafted_target=drafted_target,
+        )
 
     async def _seeds(self, context: _ValuationContext) -> list[_ValuationSeed]:
         rows = await self.repository.list_projection_players(context.projection_set.id)

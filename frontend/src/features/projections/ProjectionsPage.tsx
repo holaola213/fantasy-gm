@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { useDebouncedValue } from "../../shared/useDebouncedValue";
+
 type ProjectionSource = {
   id: number;
   key: string;
@@ -81,6 +83,9 @@ export function ProjectionsPage({ refreshKey }: { refreshKey: number }) {
   const [isLoadingSets, setIsLoadingSets] = useState(true);
   const [isLoadingPlayers, setIsLoadingPlayers] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const debouncedTeam = useDebouncedValue(team, 300);
+  const debouncedPosition = useDebouncedValue(position, 300);
 
   useEffect(() => {
     let isMounted = true;
@@ -144,14 +149,14 @@ export function ProjectionsPage({ refreshKey }: { refreshKey: number }) {
         params.set("sort", sort);
         params.set("direction", direction);
       }
-      if (search.trim()) {
-        params.set("search", search.trim());
+      if (debouncedSearch.trim()) {
+        params.set("search", debouncedSearch.trim());
       }
-      if (team.trim()) {
-        params.set("team", team.trim());
+      if (debouncedTeam.trim()) {
+        params.set("team", debouncedTeam.trim());
       }
-      if (position.trim()) {
-        params.set("position", position.trim());
+      if (debouncedPosition.trim()) {
+        params.set("position", debouncedPosition.trim());
       }
 
       const path = hasLeague
@@ -201,7 +206,15 @@ export function ProjectionsPage({ refreshKey }: { refreshKey: number }) {
       isMounted = false;
       controller.abort();
     };
-  }, [selectedSetId, hasLeague, search, team, position, sort, direction]);
+  }, [
+    selectedSetId,
+    hasLeague,
+    debouncedSearch,
+    debouncedTeam,
+    debouncedPosition,
+    sort,
+    direction,
+  ]);
 
   const selectedSet = projectionSets.find(
     (projectionSet) => String(projectionSet.id) === selectedSetId,

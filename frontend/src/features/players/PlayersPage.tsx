@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { useDebouncedValue } from "../../shared/useDebouncedValue";
+
 type ConnectionState = "checking" | "connected" | "disconnected";
 
 type Player = {
@@ -30,6 +32,7 @@ export function PlayersPage({ refreshKey }: { refreshKey: number }) {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasLoadedInitialPlayers, setHasLoadedInitialPlayers] = useState(false);
+  const debouncedSearch = useDebouncedValue(search, 300);
 
   useEffect(() => {
     let isMounted = true;
@@ -91,7 +94,7 @@ export function PlayersPage({ refreshKey }: { refreshKey: number }) {
     const controller = new AbortController();
 
     async function loadFilteredPlayers() {
-      if (!search.trim() && !team && !position) {
+      if (!debouncedSearch.trim() && !team && !position) {
         setPlayers(initialPlayers);
         setTotal(initialTotal);
         return;
@@ -100,8 +103,8 @@ export function PlayersPage({ refreshKey }: { refreshKey: number }) {
       setIsLoading(true);
 
       const params = new URLSearchParams();
-      if (search.trim()) {
-        params.set("search", search.trim());
+      if (debouncedSearch.trim()) {
+        params.set("search", debouncedSearch.trim());
       }
       if (team) {
         params.set("team", team);
@@ -154,7 +157,7 @@ export function PlayersPage({ refreshKey }: { refreshKey: number }) {
     hasLoadedInitialPlayers,
     initialPlayers,
     initialTotal,
-    search,
+    debouncedSearch,
     team,
     position,
   ]);
@@ -233,7 +236,7 @@ export function PlayersPage({ refreshKey }: { refreshKey: number }) {
       {isLoading ? <p className="state-message">Loading players...</p> : null}
       {!isLoading && !errorMessage && players.length === 0 ? (
         <p className="state-message">
-          {initialTotal === 0 && !search.trim() && !team && !position
+          {initialTotal === 0 && !debouncedSearch.trim() && !team && !position
             ? "No players exist yet. Import bootstrap data to populate the player list."
             : "No players match your filters."}
         </p>

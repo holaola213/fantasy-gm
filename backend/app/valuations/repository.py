@@ -1,4 +1,6 @@
-from sqlalchemy import Select, exists, func, select
+from datetime import datetime
+
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -79,6 +81,21 @@ class ValuationRepository:
         for player_id, position_key in result.all():
             eligibilities.setdefault(player_id, []).append(position_key)
         return eligibilities
+
+    async def projection_eligibility_fingerprint(
+        self,
+        projection_set_id: int,
+    ) -> tuple[int, datetime | None]:
+        result = await self.session.execute(
+            select(
+                func.count(PlayerEligibility.id),
+                func.max(PlayerEligibility.created_at),
+            )
+            .join(PlayerProjection, PlayerProjection.player_id == PlayerEligibility.player_id)
+            .where(PlayerProjection.projection_set_id == projection_set_id)
+        )
+        count, latest_created_at = result.one()
+        return int(count or 0), latest_created_at
 
     async def drafted_player_ids(self, draft_session_id: int) -> set[int]:
         result = await self.session.scalars(

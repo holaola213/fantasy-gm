@@ -134,13 +134,14 @@ def calculate_replacement_levels(
     roster_slot_counts: dict[str, int],
     team_count: int,
 ) -> tuple[dict[str, ReplacementLevel], dict[str, int], int, set[int]]:
+    ordered_candidates = _sort_candidates(candidates)
     slot_demand = active_slot_demand(roster_slot_counts, team_count)
     total_active_demand = sum(slot_demand.values())
     if total_active_demand <= 0:
         raise InsufficientEligiblePlayerPoolError
 
     assigned_player_ids = _optimized_active_assignments(
-        candidates=candidates,
+        ordered_candidates=ordered_candidates,
         slot_demand=slot_demand,
     )
     if len(assigned_player_ids) < total_active_demand:
@@ -150,8 +151,7 @@ def calculate_replacement_levels(
     for position in BASE_POSITION_ORDER:
         replacement = next(
             (
-                candidate
-                for candidate in _sort_candidates(candidates)
+                candidate for candidate in ordered_candidates
                 if position in candidate.eligible_positions
                 and candidate.player_id not in assigned_player_ids
             ),
@@ -181,10 +181,9 @@ def calculate_replacement_levels(
 
 def _optimized_active_assignments(
     *,
-    candidates: list[ValuationCandidate],
+    ordered_candidates: list[ValuationCandidate],
     slot_demand: dict[str, int],
 ) -> set[int]:
-    ordered_candidates = _sort_candidates(candidates)
     slots = [
         slot_key
         for slot_key in sorted(slot_demand, key=_slot_order)
@@ -195,6 +194,9 @@ def _optimized_active_assignments(
     slot_offset = player_offset + len(ordered_candidates)
     sink = slot_offset + len(slots)
     flow = _MinCostFlow(sink + 1)
+
+    if not ordered_candidates:
+        return set()
 
     for player_index, candidate in enumerate(ordered_candidates):
         player_node = player_offset + player_index

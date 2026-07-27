@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { DraftAssistantPanel } from "./DraftAssistantPanel";
+import { useDebouncedValue } from "../../shared/useDebouncedValue";
 import type {
   AvailablePlayer,
   AvailablePlayerResponse,
@@ -43,6 +44,8 @@ export function DraftPage({
   const [draftingPlayerId, setDraftingPlayerId] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const debouncedTeam = useDebouncedValue(team, 300);
 
   useEffect(() => {
     void loadInitialState();
@@ -72,11 +75,11 @@ export function DraftPage({
     async function loadAvailablePlayers() {
       setIsLoadingAvailable(true);
       const params = new URLSearchParams({ sort, direction });
-      if (search.trim()) {
-        params.set("search", search.trim());
+      if (debouncedSearch.trim()) {
+        params.set("search", debouncedSearch.trim());
       }
-      if (team.trim()) {
-        params.set("team", team.trim());
+      if (debouncedTeam.trim()) {
+        params.set("team", debouncedTeam.trim());
       }
       if (position) {
         params.set("position", position);
@@ -121,7 +124,7 @@ export function DraftPage({
       isMounted = false;
       controller.abort();
     };
-  }, [draft, search, team, position, sort, direction]);
+  }, [draft, debouncedSearch, debouncedTeam, position, sort, direction]);
 
   useEffect(() => {
     if (!draft || draft.status !== "in_progress") {

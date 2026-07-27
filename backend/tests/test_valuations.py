@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.leagues.model import ScoringRule
 from app.drafts.model import DraftPick
 from app.drafts.seed import seed_draft_eligibilities
 from app.leagues.seed import seed_league
@@ -25,6 +26,8 @@ from app.valuations.replacement import (
     ValuationCandidate,
     calculate_replacement_levels,
 )
+from app.valuations import service as valuation_service_module
+from app.valuations.service import ValuationService
 
 
 @pytest_asyncio.fixture()
@@ -293,6 +296,114 @@ async def test_available_only_uses_current_draft_snapshot_and_excludes_drafted(
     assert all(item["player_id"] != 1 for item in response.json()["items"])
     assert conflict.status_code == 409
     assert conflict.json() == {"detail": "projection_set_id conflicts with current draft"}
+
+
+@pytest.mark.asyncio
+async def test_available_only_reuses_base_cache_and_keeps_drafted_filter_current(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await seed_valuation_pool(client)
+    create_response = await client.post(
+        "/draft",
+        json={
+            "name": "Cached Valuation Draft",
+            "teams": [
+                {"name": "One", "draft_position": 1},
+                {"name": "Two", "draft_position": 2},
+            ],
+            "user_draft_position": 1,
+        },
+    )
+    assert create_response.status_code == 200
+    assert (await client.post("/draft/start")).status_code == 200
+
+    valuation_service_module._valuation_cache.clear()
+    valuation_service_module._valuation_in_flight.clear()
+    valuation_service_module._latest_league_configuration_fingerprints.clear()
+    compute_count = 0
+    original_compute = ValuationService._compute_valuation_snapshot
+
+    async def counting_compute(self, context):
+        nonlocal compute_count
+        compute_count += 1
+        return await original_compute(self, context)
+
+    monkeypatch.setattr(
+        ValuationService,
+        "_compute_valuation_snapshot",
+        counting_compute,
+    )
+
+    first = await client.get(
+        "/valuations",
+        params={"available_only": "true", "limit": 5, "sort": "overall_rank"},
+    )
+    assert first.status_code == 200
+    drafted_player = first.json()["items"][0]
+    assert compute_count == 1
+
+    assert (
+        await client.post("/draft/picks", json={"player_id": drafted_player["player_id"]})
+    ).status_code == 200
+
+    after_pick = await client.get(
+        "/valuations",
+        params={"available_only": "true", "search": drafted_player["player_name"]},
+    )
+    assert after_pick.status_code == 200
+    assert after_pick.json()["total"] == 0
+    assert compute_count == 1
+
+    assert (await client.delete("/draft/picks/latest")).status_code == 200
+    after_undo = await client.get(
+        "/valuations",
+        params={"available_only": "true", "search": drafted_player["player_name"]},
+    )
+    assert after_undo.status_code == 200
+    assert after_undo.json()["total"] == 1
+    assert compute_count == 1
+
+    before_scoring_change = after_undo.json()["items"][0]["projected_fantasy_points"]
+    async with client.session_factory() as session:
+        scoring_rule = await session.scalar(
+            text("SELECT id FROM scoring_rules WHERE stat_key = 'FGM'")
+        )
+        rule = await session.get(ScoringRule, scoring_rule)
+        assert rule is not None
+        original_points = rule.points
+        rule.points = rule.points + Decimal("1.00")
+        await session.commit()
+
+    after_scoring_change = await client.get(
+        "/valuations",
+        params={"available_only": "true", "search": drafted_player["player_name"]},
+    )
+    assert after_scoring_change.status_code == 200
+    assert after_scoring_change.json()["total"] == 1
+    assert (
+        after_scoring_change.json()["items"][0]["projected_fantasy_points"]
+        != before_scoring_change
+    )
+    assert compute_count == 2
+
+    async with client.session_factory() as session:
+        rule = await session.get(ScoringRule, scoring_rule)
+        assert rule is not None
+        rule.points = original_points
+        await session.commit()
+
+    after_scoring_restore = await client.get(
+        "/valuations",
+        params={"available_only": "true", "search": drafted_player["player_name"]},
+    )
+    assert after_scoring_restore.status_code == 200
+    assert after_scoring_restore.json()["total"] == 1
+    assert (
+        after_scoring_restore.json()["items"][0]["projected_fantasy_points"]
+        == before_scoring_change
+    )
+    assert compute_count == 3
 
 
 @pytest.mark.asyncio

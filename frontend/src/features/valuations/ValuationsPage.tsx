@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 
+import { useDebouncedValue } from "../../shared/useDebouncedValue";
+
 type SortDirection = "asc" | "desc";
 type ValuationSort =
   | "player"
@@ -74,10 +76,12 @@ export function ValuationsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const limit = 50;
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const debouncedTeam = useDebouncedValue(team, 300);
 
   useEffect(() => {
     setOffset(0);
-  }, [search, team, position, sort, direction]);
+  }, [debouncedSearch, debouncedTeam, position, sort, direction]);
 
   useEffect(() => {
     let isMounted = true;
@@ -91,11 +95,11 @@ export function ValuationsPage() {
         limit: String(limit),
         offset: String(offset),
       });
-      if (search.trim()) {
-        params.set("search", search.trim());
+      if (debouncedSearch.trim()) {
+        params.set("search", debouncedSearch.trim());
       }
-      if (team.trim()) {
-        params.set("team", team.trim());
+      if (debouncedTeam.trim()) {
+        params.set("team", debouncedTeam.trim());
       }
       if (position) {
         params.set("position", position);
@@ -146,7 +150,7 @@ export function ValuationsPage() {
       isMounted = false;
       controller.abort();
     };
-  }, [search, team, position, sort, direction, offset]);
+  }, [debouncedSearch, debouncedTeam, position, sort, direction, offset]);
 
   function changeSort(nextSort: ValuationSort) {
     if (sort === nextSort) {
